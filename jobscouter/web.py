@@ -1,9 +1,14 @@
 """LAN 전용 웹앱(:8090) — 대시보드·승인·문서 열람. 무인증. 쓰기는 전부 Temporal
 workflow 시작(파일 직접 수정 금지). Temporal 접근은 start_publish/recent_runs
-두 함수로 분리해 테스트에서 monkeypatch한다. judge는 import하지 않는다."""
+두 함수로 분리해 테스트에서 monkeypatch한다. judge는 import하지 않는다.
+
+화면 규격은 후보목록(jobfeed/template.html)과 한 벌 — 색 토큰·14px 시스템 고딕·
+1220px 폭·9px 카드·999px 필·4px 왼쪽 레일(=평판 판정)을 그대로 쓴다."""
 import json
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import markdown as mdlib
 from fastapi import FastAPI, HTTPException, Request
@@ -19,6 +24,7 @@ from jobscouter.workflow import ApplyResume, Publish
 # docs_url 등 기본 라우트를 끈다 — /docs는 이 앱의 문서 열람 라우트가 쓴다
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 _jenv = Environment(autoescape=True)
+KST = ZoneInfo("Asia/Seoul")
 
 
 def _safe_url(u) -> str:
@@ -30,96 +36,248 @@ _jenv.filters["safe_url"] = _safe_url
 
 CSS = """
 <style>
-body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 72rem; padding: 0 1rem; color: #222; }
-nav { margin-bottom: 1.5rem; }
-nav a { margin-right: .75rem; }
-table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
-th, td { border: 1px solid #ccc; padding: .4rem .6rem; text-align: left; vertical-align: top; }
-th { background: #f2f2f2; }
-input[type=text] { width: 12rem; }
-details summary { cursor: pointer; }
-h1 { font-size: 1.5rem; } h2 { font-size: 1.2rem; margin-top: 2rem; }
+:root{--bg:#fcfcfb;--fg:#1a1a18;--dim:#71716b;--faint:#a3a39c;--line:#e6e6e1;--row:#fff;--hov:#f7f7f4;
+  --good:#0f6b3f;--goodbg:#e7f4ed;--warn:#8a5a00;--warnbg:#fbf1de;--bad:#a52a2a;--badbg:#fbeaea;
+  --neu:#4a5568;--neubg:#eef0f3;--accent:#1f5fbf;
+  --rail-good:#16a34a;--rail-warn:#f59e0b;--rail-bad:#dc2626;--rail-none:#d4d4cf}
+*{box-sizing:border-box}
+html{color-scheme:light}
+body{margin:0;padding:30px 18px 70px;background:var(--bg);color:var(--fg);
+  font:14px/1.55 -apple-system,BlinkMacSystemFont,"Pretendard","Apple SD Gothic Neo",sans-serif}
+a{color:var(--accent)} a:hover{color:var(--fg)}
+.wrap{max-width:1220px;margin:0 auto}
+h1{font-size:21px;margin:0 0 5px;letter-spacing:-.3px}
+h2{font-size:14px;margin:26px 0 8px;letter-spacing:-.1px}
+h2 .c{color:var(--dim);font-weight:400;font-size:12px;margin-left:6px}
+.sub{color:var(--dim);font-size:13px;margin:0 0 18px;max-width:78ch}
+.sub b{color:var(--fg)}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px}
+.nav{display:flex;align-items:center;gap:6px;padding:0 0 12px;margin:0 0 22px;border-bottom:1px solid var(--line)}
+.brand{font-size:13px;font-weight:700;letter-spacing:-.2px;margin-right:10px}
+.pill{font:inherit;font-size:12px;padding:4px 11px;border-radius:999px;cursor:pointer;line-height:1.5;
+  border:1px solid var(--line);background:var(--row);color:var(--fg);text-decoration:none;display:inline-block}
+.pill:hover{border-color:var(--dim);color:var(--fg)}
+.pill[aria-pressed="true"]{background:var(--fg);color:#fff;border-color:var(--fg)}
+.nav .meta{margin-left:auto;font-size:11px;color:var(--dim)}
+.stats{display:flex;flex-wrap:wrap;gap:20px;padding:13px 16px;border:1px solid var(--line);border-radius:9px;background:var(--row);margin-bottom:16px}
+.stat .n{font-size:19px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.2}
+.stat .l{font-size:11px;color:var(--dim)}
+.bar{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;align-items:center}
+.bar .lbl{font-size:11px;color:var(--dim);min-width:44px}
+.list{border:1px solid var(--line);border-radius:9px;background:var(--row);overflow:hidden;margin-bottom:12px}
+.head,.row{display:grid;gap:10px;align-items:center;padding:9px 14px;grid-template-columns:minmax(0,1fr)}
+.head{font-size:11px;color:var(--dim);border-bottom:1px solid var(--line);background:var(--bg)}
+.row{border-bottom:1px solid var(--line);background:var(--row);border-left:4px solid var(--rail-none)}
+.row:last-child{border-bottom:0}
+.row:hover{background:var(--hov)}
+.row.v-good{border-left-color:var(--rail-good)}
+.row.v-warn{border-left-color:var(--rail-warn)}
+.row.v-bad{border-left-color:var(--rail-bad)}
+.row.plain{border-left:0}
+.dash .head,.dash .row{grid-template-columns:minmax(220px,1.1fr) 78px 44px 44px 44px 44px 44px 48px minmax(290px,1.6fr) 56px 150px}
+.rp .head,.rp .row{grid-template-columns:150px 170px 64px minmax(300px,1.5fr) minmax(220px,1fr) 56px}
+.rep .head,.rep .row{grid-template-columns:110px 90px minmax(0,1fr)}
+.legend{display:flex;flex-wrap:wrap;gap:16px;align-items:center;padding:9px 14px;margin-bottom:2px;font-size:11.5px;color:var(--dim)}
+.legend .k{display:flex;align-items:center;gap:6px}
+.legend .sw{width:4px;height:14px;border-radius:2px;display:inline-block}
+.pos{font-weight:600;letter-spacing:-.1px;line-height:1.35}
+.pos a{color:inherit;text-decoration:none}
+.pos a:hover{text-decoration:underline;text-underline-offset:2px}
+.co{color:var(--dim);font-size:12px;margin-top:1px}
+.fit{display:flex;align-items:center;gap:7px}
+.fit .v{font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;min-width:24px;text-align:right}
+.fit .track{flex:1;height:5px;border-radius:3px;background:var(--neubg);overflow:hidden}
+.fit .fill{height:100%;border-radius:3px;background:var(--neu)}
+.fit.t1 .v{color:var(--good)} .fit.t1 .fill{background:var(--good)}
+.fit.t2 .v{color:var(--fg)}
+.fit.t3 .v{color:var(--faint)} .fit.t3 .fill{background:var(--faint)}
+.sc{font-size:12px;text-align:center;font-variant-numeric:tabular-nums;color:var(--dim)}
+.sc.hi{color:var(--good);font-weight:700}
+.sc.lo{color:var(--faint)}
+.sc.pen{color:var(--bad)}
+.conf{font-size:12px;font-variant-numeric:tabular-nums;color:var(--dim);text-align:center}
+.why{font-size:12px;line-height:1.45}
+.why details{margin-top:4px;font-size:11px;color:var(--dim)}
+.why summary{cursor:pointer;list-style:none;color:var(--accent)}
+.why summary::-webkit-details-marker{display:none}
+.why ul{margin:4px 0 0;padding-left:16px}
+.st{font-size:11px;line-height:1.5}
+.st span{display:inline-block;padding:1px 7px;border-radius:4px;background:var(--neubg);color:var(--neu);margin:1px 2px 1px 0}
+.st .bad{background:var(--badbg);color:var(--bad)}
+.st .good{background:var(--goodbg);color:var(--good)}
+.st .warn{background:var(--warnbg);color:var(--warn)}
+.in{font:inherit;font-size:12px;padding:4px 8px;border:1px solid var(--line);border-radius:6px;background:var(--row);color:var(--fg);width:100%}
+.in::placeholder{color:var(--faint)}
+.chk{width:16px;height:16px;margin:0;accent-color:var(--fg);vertical-align:middle}
+.btn{font:inherit;font-size:12px;padding:5px 13px;border-radius:999px;cursor:pointer;border:1px solid var(--line);background:var(--row);color:var(--fg)}
+.btn.primary{background:var(--fg);color:#fff;border-color:var(--fg)}
+.actions{display:flex;align-items:center;gap:12px;padding:11px 14px;margin-top:10px;border:1px solid var(--line);border-radius:9px;background:var(--row);font-size:12px;color:var(--dim)}
+.actions .btn{margin-left:auto}
+.rubric{border:1px solid var(--line);border-radius:9px;background:var(--row);padding:0 16px;margin-bottom:16px;font-size:12.5px}
+.rubric table{width:100%;border-collapse:collapse;margin:10px 0 12px}
+.rubric th,.rubric td{text-align:left;padding:5px 10px 5px 0;border-bottom:1px solid var(--line);vertical-align:top}
+.rubric th{font-size:11px;color:var(--dim);font-weight:600}
+.rubric tr:last-child td{border-bottom:0}
+.cols{display:grid;grid-template-columns:minmax(0,1fr) 260px;gap:16px;align-items:start}
+.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
+.side{border:1px solid var(--line);border-radius:9px;background:var(--row);padding:12px 14px;margin-bottom:12px;font-size:12px}
+.side h3{font-size:11px;color:var(--dim);font-weight:600;margin:0 0 8px}
+.side .n{font-size:19px;font-weight:700;line-height:1.2}
+.side p{margin:4px 0 0;color:var(--dim);line-height:1.45}
+.files{display:flex;flex-direction:column;gap:2px}
+.files a{display:block;padding:5px 8px;border-radius:6px;color:var(--fg);text-decoration:none;font-size:12px}
+.files a:hover{background:var(--hov)}
+.doc{border:1px solid var(--line);border-radius:9px;background:var(--row);padding:26px 30px;margin-bottom:16px;overflow-x:auto}
+.doc h1{font-size:19px;margin:0 0 12px}
+.doc h2{font-size:15px;margin:22px 0 8px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+.doc h3{font-size:13.5px;margin:16px 0 6px}
+.doc p{margin:0 0 10px;font-size:13.5px;line-height:1.7;max-width:78ch}
+.doc ul,.doc ol{margin:0 0 10px;padding-left:20px;max-width:80ch}
+.doc li{margin:3px 0;font-size:13.5px;line-height:1.6}
+.doc blockquote{margin:0 0 12px;padding:8px 14px;border-left:3px solid var(--line);color:var(--dim);font-size:13px}
+.doc table{border-collapse:collapse;margin:0 0 14px;font-size:12.5px}
+.doc th,.doc td{text-align:left;padding:5px 10px 5px 0;border-bottom:1px solid var(--line);vertical-align:top}
+.doc th{font-size:11px;color:var(--dim);font-weight:600}
+.doc pre{background:var(--neubg);padding:10px 12px;border-radius:6px;overflow-x:auto;font-size:11.5px}
+.doc .fn{font-size:11px;color:var(--dim);margin:0 0 14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.card{border:1px solid var(--line);border-radius:9px;background:var(--row);padding:12px 14px;min-height:64px;text-decoration:none;color:inherit;display:block}
+.card:hover{background:var(--hov);color:inherit}
+.card .t{font-size:13.5px;font-weight:600;letter-spacing:-.1px}
+.card .m{font-size:11px;color:var(--dim);margin-top:3px;font-variant-numeric:tabular-nums}
+.card.none .t{color:var(--faint)}
+.empty{padding:32px;text-align:center;color:var(--dim);border:1px dashed var(--line);border-radius:9px;background:var(--row);font-size:13px;margin-bottom:12px}
+footer{margin-top:32px;padding-top:18px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px}
+footer p{margin:0 0 7px}
+@media(max-width:1060px){.dash .head,.rp .head,.rep .head{display:none}
+  .dash .row,.rp .row,.rep .row{grid-template-columns:1fr;gap:6px;padding:13px 14px}
+  .sc{text-align:left}.cols,.two{grid-template-columns:1fr}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
 </style>
 """
 
-_BASE = _jenv.from_string("""<!doctype html><html><head><meta charset="utf-8">
-<title>{{ title }} — job-scouter</title>""" + CSS + """</head><body>
-<nav><a href="/">대시보드</a> · <a href="/candidates">후보목록</a> · <a href="/reports">보고서</a>
-· <a href="/resume">이력서</a> · <a href="/applications">지원서류</a> · <a href="/docs">문서</a></nav>
+NAV = [("/", "대시보드"), ("/candidates", "후보목록"), ("/reports", "보고서"),
+       ("/resume", "이력서"), ("/applications", "지원서류"), ("/docs", "문서")]
+
+_BASE = _jenv.from_string("""<!doctype html><html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }} — job-scouter</title>""" + CSS + """</head><body><div class="wrap">
+<div class="nav"><span class="brand">job-scouter</span>
+{% for href, name in nav %}<a class="pill" href="{{ href }}" aria-pressed="{{ 'true' if name == active else 'false' }}">{{ name }}</a>
+{% endfor %}<span class="meta">LAN 전용 · 인증 없음</span></div>
 <h1>{{ title }}</h1>
+{% if sub %}<p class="sub">{{ sub|safe }}</p>{% endif %}
 {{ body|safe }}
-</body></html>""")
+{% if source %}<footer><p>원본: {{ source|safe }}</p></footer>{% endif %}
+</div></body></html>""")
 
-_LIST = _jenv.from_string("""
-{% if items %}<ul>{% for href, name in items %}<li><a href="{{ href }}">{{ name }}</a></li>{% endfor %}</ul>
-{% else %}<p>없음</p>{% endif %}""")
-
-_SECTIONS = _jenv.from_string("""
-{% if sections %}{% for name, html in sections %}<h2>{{ name }}</h2><div>{{ html|safe }}</div>{% endfor %}
-{% else %}<p>없음</p>{% endif %}""")
+_STATS = _jenv.from_string("""<div class="stats">{% for n, l in items %}
+<div class="stat"><div class="n">{{ n }}</div><div class="l">{{ l }}</div></div>{% endfor %}</div>""")
 
 _DASHBOARD = _jenv.from_string("""
+<div class="legend"><span>행 왼쪽 색띠 = 평판 판정 (후보목록과 동일)</span>
+<span class="k"><i class="sw" style="background:var(--rail-good)"></i>괜찮음</span>
+<span class="k"><i class="sw" style="background:var(--rail-warn)"></i>주의</span>
+<span class="k"><i class="sw" style="background:var(--rail-bad)"></i>회피</span>
+<span class="k"><i class="sw" style="background:var(--rail-none)"></i>정보 없음</span></div>
 <form method="post" action="/publish">
-<table>
-<tr><th>회사</th><th>포지션</th><th>점수(스택/도메인/레벨/역할/감점)</th><th>총점</th><th>conf</th>
-<th>사유</th><th>인용</th><th>승인</th><th>거부 사유</th></tr>
+<div class="list dash">
+<div class="head"><div>포지션 / 회사</div><div>적합도</div><div class="sc">스택</div><div class="sc">도메인</div>
+<div class="sc">레벨</div><div class="sc">역할</div><div class="sc">감점</div><div class="conf">conf</div>
+<div>판정 사유 · 인용</div><div style="text-align:center">승인</div><div>거부 사유</div></div>
 {% for p in proposals %}
-<tr>
-<td>{{ p.company }}</td>
-<td><a href="{{ p.url|safe_url }}" target="_blank" rel="noopener">{{ p.title }}</a></td>
-<td>{{ p.scores|join(' / ') }}</td>
-<td>{{ p.total }}</td>
-<td>{{ '%.2f'|format(p.confidence or 0) }}</td>
-<td>{{ p.reason }}</td>
-<td><details><summary>{{ p.quotes|length }}건</summary><ul>
-{% for q in p.quotes %}<li>{{ q }}</li>{% endfor %}</ul></details></td>
-<td><input type="checkbox" name="approve" value="{{ p.id }}"></td>
-<td><input type="text" name="why_{{ p.id }}" placeholder="거부 사유"></td>
-</tr>
+<div class="row v-{{ p.rail }}">
+<div><div class="pos"><a href="{{ p.url|safe_url }}" target="_blank" rel="noopener">{{ p.title }}</a></div><div class="co">{{ p.company }}</div></div>
+<div class="fit {{ p.tier }}"><span class="v">{{ p.total }}</span><span class="track"><span class="fill" style="width:{{ p.total }}%"></span></span></div>
+{% for v, cls in p.cells %}<div class="sc {{ cls }}">{{ v }}</div>{% endfor %}
+<div class="conf">{{ '%.2f'|format(p.confidence or 0) }}</div>
+<div class="why">{{ p.reason }}<details><summary>인용 {{ p.quotes|length }}건</summary><ul>
+{% for q in p.quotes %}<li>{{ q }}</li>{% endfor %}</ul></details></div>
+<div style="text-align:center"><input class="chk" type="checkbox" name="approve" value="{{ p.id }}"></div>
+<div><input class="in" type="text" name="why_{{ p.id }}" placeholder="거부 사유"></div>
+</div>
 {% else %}
-<tr><td colspan="9">대기 중인 후보 없음</td></tr>
+<div class="empty">대기 중인 후보 없음 — 다음 DailyScan은 매일 09:07</div>
 {% endfor %}
-</table>
-<button type="submit">제출</button>
+</div>
+<div class="actions"><span>승인 체크 · 거부 사유 입력 후 제출하면 Publish 워크플로가 등재·판례·지원서류 초안·보고서를 한 번에 처리합니다</span>
+<button class="btn primary" type="submit">제출</button></div>
 </form>
 
-<h2>평판 미조사 회사</h2>
-{% if unresearched %}<ul>{% for c in unresearched %}<li>{{ c }}</li>{% endfor %}</ul>
-{% else %}<p>없음</p>{% endif %}
+<h2>평판 미조사 회사<span class="c">{{ unresearched|length }}</span></h2>
+{% if unresearched %}<div class="st">{% for c in unresearched %}<span>{{ c }}</span>{% endfor %}</div>
+<p class="sub" style="margin-top:6px">잡플래닛은 자동 조회하지 않습니다. <code>/job-scout</code>로 조사해 <code>jobfeed/기업평판.md</code>를 push하면 다음 Publish부터 색띠와 추천도에 반영됩니다.</p>
+{% else %}<p class="sub">없음</p>{% endif %}
 
 <h2>최근 실행</h2>
-{% if runs_error %}<p>Temporal 연결 실패: {{ runs_error }}</p>
-{% elif runs %}<table><tr><th>종류</th><th>상태</th><th>시작</th></tr>
-{% for r in runs %}<tr><td>{{ r.type }}</td><td>{{ r.status }}</td><td>{{ r.start }}</td></tr>{% endfor %}
-</table>
-{% else %}<p>없음</p>{% endif %}
+<div class="rubric">{% if runs_error %}<p style="color:var(--bad)">Temporal 연결 실패: {{ runs_error }}</p>
+{% elif runs %}<table><tr><th style="width:160px">종류</th><th style="width:120px">상태</th><th>시작 (KST)</th></tr>
+{% for r in runs %}<tr><td>{{ r.type }}</td><td class="st"><span class="{{ 'good' if r.status == 'COMPLETED' else ('bad' if r.status in ('FAILED', 'TERMINATED', 'TIMED_OUT') else '') }}">{{ r.status }}</span></td><td>{{ r.start }}</td></tr>{% endfor %}
+</table>{% else %}<p>없음</p>{% endif %}</div>
 """)
 
 _RESUME_PROPOSALS = _jenv.from_string("""
-<p><a href="/resume">이력서 보기로 돌아가기</a></p>
 <form method="post" action="/resume/apply">
-<table>
-<tr><th>대상</th><th>섹션</th><th>종류</th><th>현재 → 제안</th><th>근거</th><th>반영</th></tr>
+<div class="list rp">
+<div class="head"><div>대상</div><div>섹션</div><div>종류</div><div>현재 → 제안</div><div>근거 (PKB)</div><div style="text-align:center">반영</div></div>
 {% for it in items %}
-<tr>
-<td>{{ it.target }}</td>
-<td>{{ it.section }}</td>
-<td>{{ it.kind }}</td>
-<td>{% if it.current %}<del>{{ it.current }}</del><br>{% endif %}→ {{ it.proposed }}</td>
-<td>{{ it.evidence }}</td>
-<td><input type="checkbox" name="apply" value="{{ it.id }}"></td>
-</tr>
+<div class="row plain">
+<div class="st"><span>{{ it.target }}</span></div>
+<div style="font-size:12px">{{ it.section }}</div>
+<div class="st"><span class="{{ {'add': 'good', '추가': 'good', 'remove': 'bad', '삭제': 'bad'}.get(it.kind, 'warn') }}">{{ it.kind }}</span></div>
+<div style="font-size:12.5px;line-height:1.5">{% if it.current %}<del style="color:var(--faint)">{{ it.current }}</del><br>{% endif %}→ {{ it.proposed }}</div>
+<div style="font-size:11.5px;color:var(--dim);line-height:1.45">{{ it.evidence }}</div>
+<div style="text-align:center"><input class="chk" type="checkbox" name="apply" value="{{ it.id }}"></div>
+</div>
 {% else %}
-<tr><td colspan="6">대기 중인 제안 없음</td></tr>
+<div class="empty">대기 중인 제안 없음 — ResumeSync는 매주 월 08:00, PKB가 그대로면 제안을 만들지 않습니다</div>
 {% endfor %}
-</table>
-<button type="submit">반영</button>
+</div>
+<div class="actions"><span>체크한 제안만 ApplyResume이 사실베이스에 반영하고 검색 색인을 다시 만든 뒤 커밋합니다</span>
+<button class="btn primary" type="submit">반영</button></div>
 </form>
 """)
 
+_ROWS = _jenv.from_string("""
+<div class="list rep">{% if items %}{% for it in items %}<div class="row plain">
+<div style="font-variant-numeric:tabular-nums;font-size:12.5px">{{ it.date }}</div>
+<div class="st"><span class="{{ it.cls }}">{{ it.kind }}</span></div>
+<div class="pos"><a href="{{ it.href }}">{{ it.name }}</a></div></div>{% endfor %}
+{% else %}<div class="empty">없음</div>{% endif %}</div>""")
 
-def _render(title: str, body: str) -> HTMLResponse:
-    return HTMLResponse(_BASE.render(title=title, body=body))
+_GROUPS = _jenv.from_string("""
+<div class="two">{% for col in cols %}<div>{% for title, items in col %}
+<h2 style="margin-top:0">{{ title }}<span class="c">{{ items|length }}</span></h2>
+<div class="list">{% for href, name in items %}<div class="row plain"><div class="pos" style="font-weight:500"><a href="{{ href }}">{{ name }}</a></div></div>{% endfor %}</div>
+{% endfor %}</div>{% endfor %}</div>
+{% if not cols %}<div class="empty">없음</div>{% endif %}""")
+
+_CARDS = _jenv.from_string("""
+{% if items %}<div class="cards">{% for it in items %}
+<a class="card{{ ' none' if not it.n }}" href="{{ it.href }}"><div class="t">{{ it.name }}</div>
+<div class="m">{% if it.n %}md {{ it.n }}{% else %}md 없음{% endif %} · {{ it.date }}</div></a>{% endfor %}</div>
+{% else %}<div class="empty">없음</div>{% endif %}""")
+
+_DOCS = _jenv.from_string("""
+{% if sections %}{% if sections|length > 1 %}<div class="bar"><span class="lbl">문서</span>
+{% for name, html in sections %}<a class="pill" href="#{{ loop.index }}">{{ name }}</a>{% endfor %}</div>{% endif %}
+{% for name, html in sections %}<div class="doc" id="{{ loop.index }}"><p class="fn">{{ name }}</p>{{ html|safe }}</div>{% endfor %}
+{% else %}<div class="empty">없음</div>{% endif %}""")
+
+_RESUME = _jenv.from_string("""
+<div class="cols"><div>
+{% for name, html in sections %}<div class="doc" id="{{ loop.index }}"><p class="fn">{{ name }}</p>{{ html|safe }}</div>{% endfor %}
+</div><div>
+<div class="side"><h3>갱신 제안</h3><div class="n">{{ pending }}<span style="font-size:12px;font-weight:400;color:var(--dim)"> 건 대기</span></div>
+<p>ResumeSync 매주 월 08:00 · PKB와 대조해 차이만 제안</p>
+<p style="margin-top:8px"><a class="pill" href="/resume/proposals">갱신 제안 보기</a></p></div>
+<div class="side"><h3>문서</h3><div class="files">{% for name, html in sections %}<a href="#{{ loop.index }}">{{ name }}</a>{% endfor %}</div></div>
+<div class="side"><h3>규칙</h3><p>사실베이스는 사람이 검증한 문장만 담습니다. 판정·초안·검색(jobscout_facts)이 모두 이 문서를 읽습니다.</p></div>
+</div></div>""")
+
+
+def _render(title: str, body: str, active: str = "", sub: str = "", source: str = "") -> HTMLResponse:
+    return HTMLResponse(_BASE.render(title=title, body=body, nav=NAV, active=active,
+                                     sub=sub, source=source))
 
 
 def _render_md(text: str) -> str:
@@ -140,26 +298,38 @@ def _load_proposals() -> list[dict]:
     return sorted(props.values(), key=lambda p: -p.get("total", 0))
 
 
-def _reputed_companies() -> set[str]:
-    """기업평판.md 표 첫 셀(회사명)을 _norm으로 모은 집합 — 헤더·구분선 행은 제외."""
+_MAX = [35, 25, 20, 20]
+_RAIL = {"✅": "good", "⚠️": "warn", "🚫": "bad"}
+
+
+def _reputation() -> dict[str, str]:
+    """기업평판.md 표 → {_norm(회사): good|warn|bad|none}. 판정 열(4번째 셀)의 기호로 읽는다."""
     path = JOBFEED / "기업평판.md"
     if not path.exists():
-        return set()
-    out = set()
+        return {}
+    out = {}
     for ln in path.read_text().splitlines():
-        if not ln.startswith("|"):
+        cells = [c.strip() for c in ln.split("|")]
+        if not ln.startswith("|") or len(cells) < 5:
             continue
-        cells = ln.split("|")
-        if len(cells) < 2:
-            continue
-        name = cells[1].strip()
+        name = cells[1]
         if not name or name == "회사" or set(name) <= {"-", ":"}:
             continue
-        out.add(_norm(name))
+        out[_norm(name)] = next((v for k, v in _RAIL.items() if k in cells[4]), "none")
     return out
 
 
-# --- Temporal 접근 — 이 두 함수만 client를 만든다. 테스트에서 monkeypatch. ---
+def _decorate(p: dict, rep: dict[str, str]) -> dict:
+    """템플릿용 파생 필드 — 후보목록 rowHTML과 같은 규칙(hi ≥85%, lo ≤40%, 총점 등급)."""
+    sc = list(p.get("scores") or []) + [0] * 5
+    cells = [(v, "hi" if v / m >= .85 else ("lo" if v / m <= .4 else "")) for v, m in zip(sc, _MAX)]
+    cells.append((sc[4] or "·", "pen" if sc[4] else ""))
+    total = p.get("total", 0)
+    return {**p, "cells": cells, "tier": "t1" if total >= 80 else "t2" if total >= 70 else "t3",
+            "rail": rep.get(_norm(p.get("company", "")), "none")}
+
+
+# --- Temporal 접근 — 이 세 함수만 client를 만든다. 테스트에서 monkeypatch. ---
 
 async def start_publish(ids: list[str], rejects: list[dict]) -> str:
     client = await Client.connect(TEMPORAL)
@@ -178,33 +348,39 @@ async def start_apply_resume(ids: list[str]) -> str:
 
 
 async def recent_runs() -> list[dict]:
+    # dev 서버(SQLite)는 ORDER BY를 지원하지 않는다 — 넉넉히 받아 여기서 정렬
     client = await Client.connect(TEMPORAL)
     out = []
     async for wf in client.list_workflows(
-            "WorkflowType='DailyScan' OR WorkflowType='Publish' ORDER BY StartTime DESC",
-            limit=5):
+            " OR ".join(f"WorkflowType='{t}'" for t in ("DailyScan", "Publish", "ResumeSync", "ApplyResume")),
+            limit=30):
         out.append({"type": wf.workflow_type,
                     "status": wf.status.name if wf.status else "?",
-                    "start": wf.start_time.isoformat()})
-    return out
+                    "start": wf.start_time.astimezone(KST).strftime("%Y-%m-%d %H:%M")})
+    return sorted(out, key=lambda r: r["start"], reverse=True)[:6]
 
 
 # --- 라우트 ---
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
-    proposals = _load_proposals()
-    reputed = _reputed_companies()
-    unresearched = sorted({p["company"] for p in proposals
-                           if _norm(p["company"]) not in reputed})
+    rep = _reputation()
+    proposals = [_decorate(p, rep) for p in _load_proposals()]
+    unresearched = sorted({p["company"] for p in proposals if _norm(p["company"]) not in rep})
     runs, runs_error = None, None
     try:
         runs = await recent_runs()
     except Exception as e:
         runs_error = str(e)
-    return _render("대시보드", _DASHBOARD.render(
-        proposals=proposals, unresearched=unresearched,
-        runs=runs, runs_error=runs_error))
+    stats = _STATS.render(items=[(len(proposals), "승인 대기"),
+                                 (sum(1 for p in proposals if p.get("total", 0) >= 75), "적합도 75+"),
+                                 (len(unresearched), "평판 미조사 회사"), ("09:07", "다음 DailyScan")])
+    body = stats + _DASHBOARD.render(proposals=proposals, unresearched=unresearched,
+                                     runs=runs, runs_error=runs_error)
+    return _render("승인 대기", body, active="대시보드",
+                   sub="<b>DailyScan</b>이 매일 09:07 새 공고를 판정한 뒤 아직 결정하지 않은 후보입니다. "
+                       "승인하면 <b>후보목록에 등재</b>되고 지원서류 초안 5종이 만들어지며, 거부 사유를 적으면 판례로 남아 다음 판정에 참고됩니다.",
+                   source="<code>jobfeed/proposals.json</code> · 판례 <code>data/judgments.jsonl</code> · 평판 <code>jobfeed/기업평판.md</code>")
 
 
 @app.post("/publish")
@@ -222,15 +398,23 @@ async def publish(request: Request):
 def candidates():
     path = JOBFEED / "후보목록.html"
     if not path.exists():
-        return _render("후보목록", "<p>아직 없음 — Publish 실행 후 생성됨.</p>")
+        return _render("후보목록", '<div class="empty">아직 없음 — Publish 실행 후 생성됨</div>', active="후보목록")
     return HTMLResponse(path.read_text())
 
 
 @app.get("/reports", response_class=HTMLResponse)
 def reports_index():
     d = JOBFEED / "reports"
-    names = sorted(p.stem for p in d.glob("*.md")) if d.exists() else []
-    return _render("보고서", _LIST.render(items=[(f"/reports/{n}", n) for n in names]))
+    names = sorted((p.stem for p in d.glob("*.md")), reverse=True) if d.exists() else []
+    items = []
+    for n in names:
+        date, _, kind = n.partition("_")
+        items.append({"date": date, "kind": kind or "-", "name": n, "href": f"/reports/{n}",
+                      "cls": "good" if kind == "자동사이클" else ""})
+    return _render("보고서", _ROWS.render(items=items), active="보고서",
+                   sub=f"{len(items)}건. <b>매칭조사</b>는 <code>/job-scout</code>로 직접 조사한 날의 기록, "
+                       "<b>자동사이클</b>은 Publish가 쓰는 사이클 요약입니다.",
+                   source="<code>jobfeed/reports/*.md</code>")
 
 
 @app.get("/reports/{name}", response_class=HTMLResponse)
@@ -239,7 +423,7 @@ def report(name: str):
     path = JOBFEED / "reports" / f"{name}.md"
     if not path.exists():
         raise HTTPException(404, "보고서 없음")
-    return _render(name, _render_md(path.read_text()))
+    return _render(name, _DOCS.render(sections=[(path.name, _render_md(path.read_text()))]), active="보고서")
 
 
 @app.get("/resume", response_class=HTMLResponse)
@@ -252,8 +436,11 @@ def resume():
     if DRAFTS.exists():
         for p in sorted(DRAFTS.glob("*.md")):
             sections.append((p.name, _render_md(p.read_text())))
-    body = '<p><a href="/resume/proposals">갱신 제안 보기</a></p>' + _SECTIONS.render(sections=sections)
-    return _render("이력서", body)
+    body = _RESUME.render(sections=sections, pending=len(_load_resume_proposals()))
+    return _render("이력서", body, active="이력서",
+                   sub="<b>JK.md</b>(이력서)·<b>이력서_사실베이스.md</b>·<b>drafts/</b>를 그대로 렌더링합니다. "
+                       "사실베이스는 판정과 지원서류 초안의 유일한 근거이며, 갱신은 ResumeSync 제안을 승인해야만 반영됩니다.",
+                   source="<code>JK.md</code> · <code>references/이력서_사실베이스.md</code> · <code>drafts/*.md</code>")
 
 
 def _load_resume_proposals() -> list[dict]:
@@ -265,7 +452,13 @@ def _load_resume_proposals() -> list[dict]:
 
 @app.get("/resume/proposals", response_class=HTMLResponse)
 def resume_proposals():
-    return _render("이력서 갱신 제안", _RESUME_PROPOSALS.render(items=_load_resume_proposals()))
+    items = _load_resume_proposals()
+    stats = _STATS.render(items=[(len(items), "대기 제안"), ("월 08:00", "ResumeSync")])
+    return _render("이력서 갱신 제안", stats + _RESUME_PROPOSALS.render(items=items), active="이력서",
+                   sub="매주 월요일 <b>ResumeSync</b>가 PKB(경력·소개 문서)와 사실베이스를 대조해 차이만 제안합니다. "
+                       "PKB가 지난주와 같으면 제안을 만들지 않습니다(해시 게이트). "
+                       '<a href="/resume">이력서 보기로 돌아가기</a>',
+                   source="<code>jobfeed/resume_proposals.json</code>")
 
 
 @app.post("/resume/apply")
@@ -278,10 +471,17 @@ async def resume_apply(request: Request):
 
 @app.get("/applications", response_class=HTMLResponse)
 def applications_index():
-    names = sorted(p.name for p in APPLICATIONS.iterdir() if p.is_dir()) \
-        if APPLICATIONS.exists() else []
-    return _render("지원서류", _LIST.render(
-        items=[(f"/applications/{n}", n) for n in names]))
+    items = []
+    if APPLICATIONS.exists():
+        for p in sorted(APPLICATIONS.iterdir()):
+            if p.is_dir():
+                mds = list(p.glob("*.md"))
+                items.append({"name": p.name, "href": f"/applications/{p.name}", "n": len(mds),
+                              "date": datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d")})
+    return _render("지원서류", _CARDS.render(items=items), active="지원서류",
+                   sub=f"{len(items)}개사. 승인한 공고는 Publish가 <b>JD·맞춤 이력서·자기소개서·면접지식맵·포트폴리오 구성</b> "
+                       "5종 초안을 <code>_draft</code> 접미사로 만들어 두고, 검토는 사람이 합니다.",
+                   source="<code>applications/&lt;회사&gt;/*.md</code>")
 
 
 @app.get("/applications/{slug}", response_class=HTMLResponse)
@@ -291,14 +491,24 @@ def application(slug: str):
     if not d.exists():
         raise HTTPException(404, "지원서류 없음")
     sections = [(p.name, _render_md(p.read_text())) for p in sorted(d.glob("*.md"))]
-    return _render(slug, _SECTIONS.render(sections=sections))
+    return _render(slug, _DOCS.render(sections=sections), active="지원서류",
+                   sub=f"<code>applications/{slug}</code> · md {len(sections)}")
 
 
 @app.get("/docs", response_class=HTMLResponse)
 def docs_index():
-    names = sorted(str(p.relative_to(REFERENCES)) for p in REFERENCES.rglob("*.md")) \
-        if REFERENCES.exists() else []
-    return _render("문서", _LIST.render(items=[(f"/docs/{n}", n) for n in names]))
+    groups: dict[str, list] = {}
+    if REFERENCES.exists():
+        for p in sorted(REFERENCES.rglob("*.md")):
+            rel = p.relative_to(REFERENCES)
+            groups.setdefault(str(rel.parent) if rel.parent != Path(".") else "references", []) \
+                .append((f"/docs/{rel}", rel.name))
+    ordered = sorted(groups.items(), key=lambda kv: -len(kv[1]))
+    cols = [ordered[1:], ordered[:1]] if len(ordered) > 1 else [ordered]   # 큰 그룹은 오른쪽 열에
+    total = sum(len(v) for v in groups.values())
+    return _render("문서", _GROUPS.render(cols=cols if total else []), active="문서",
+                   sub=f"{total}건. <code>references/</code>의 마크다운 — 작성 규칙·면접 대비 노트·사실베이스·로드맵.",
+                   source="<code>references/**/*.md</code>")
 
 
 @app.get("/docs/{path:path}", response_class=HTMLResponse)
@@ -307,4 +517,4 @@ def docs_page(path: str):
     full = REFERENCES / path
     if full.suffix != ".md" or not full.exists():
         raise HTTPException(404, "문서 없음")
-    return _render(path, _render_md(full.read_text()))
+    return _render(path, _DOCS.render(sections=[(full.name, _render_md(full.read_text()))]), active="문서")
