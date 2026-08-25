@@ -1,3 +1,4 @@
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -267,3 +268,136 @@ def test_write_application_rejects_traversal_names(tmp_path, monkeypatch):
         io_acts.write_application("회사", bad)          # 탈출 파일명은 걸러지고 5종 미달로 거부
     assert not (tmp_path / "evil.md").exists()
     assert io_acts._app_slug("../x/..") == "x"   # slug는 경로 문자를 제거한다
+
+
+class _FakeESClient:
+    """pkb_snapshot 테스트용 — search()만 흉내."""
+
+    def __init__(self, hits):
+        self.hits = hits
+        self.calls = []
+
+    def search(self, **kw):
+        self.calls.append(kw)
+        return {"hits": {"hits": self.hits}}
+
+
+def test_pkb_snapshot_deterministic_hash_and_filter(monkeypatch):
+    """같은 hits면 해시가 같고, curated 프로필+카테고리 필터가 실제로 실린다."""
+    hits = [{"_source": {"content": "content A"}},
+            {"_source": {"content": "content B"}}]
+    fake = _FakeESClient(hits)
+    monkeypatch.setattr(io_acts, "es", lambda: fake)
+
+    snap1 = io_acts.pkb_snapshot()
+    snap2 = io_acts.pkb_snapshot()
+    assert snap1["docs"] == 2
+    assert snap1["hash"] == snap2["hash"]   # 결정적
+    assert "content A" in snap1["text"] and "content B" in snap1["text"]
+
+    kw = fake.calls[0]
+    assert kw["index"] == io_acts.PKB_INDEX
+    cats = [c.strip() for c in io_acts.PKB_CATEGORIES.split(",")]
+    filt = kw["query"]["bool"]["filter"]
+    assert {"terms": {"category": cats}} in filt
+    assert {"terms": {"doc_type": ["concept", "guide", "moc"]}} in filt
+    assert {"terms": {"status": ["canonical", "active"]}} in filt
+
+
+def test_pkb_snapshot_truncates_text_but_hashes_full_content(monkeypatch):
+    hits = [{"_source": {"content": "A" * 15}},
+            {"_source": {"content": "B" * 15}},
+            {"_source": {"content": "C" * 15}}]
+    monkeypatch.setattr(io_acts, "es", lambda: _FakeESClient(hits))
+    monkeypatch.setattr(io_acts, "PKB_TEXT_CAP", 20)   # 15자 1개만 들어가고 잘림
+
+    snap = io_acts.pkb_snapshot()
+    assert snap["docs"] == 3
+    assert "[... 이하 잘림 ...]" in snap["text"]
+    assert "C" * 15 not in snap["text"]
+    assert snap["hash"] == hashlib.sha256(
+        ("A" * 15 + "\n\n" + "B" * 15 + "\n\n" + "C" * 15).encode()).hexdigest()
+
+
+def test_resume_state_hash_missing_then_present(tmp_path, monkeypatch):
+    state = tmp_path / "resume_state.json"
+    monkeypatch.setattr(io_acts, "RESUME_STATE", state)
+    assert io_acts.resume_state_hash() == ""
+    state.write_text(json.dumps({"hash": "abc123"}))
+    assert io_acts.resume_state_hash() == "abc123"
+
+
+def test_save_resume_proposals_assigns_ids_and_writes_state(tmp_path, monkeypatch):
+    _init_repo(tmp_path)
+    jobfeed = tmp_path / "jobfeed"
+    jobfeed.mkdir()
+    monkeypatch.setattr(io_acts, "JOBFEED", jobfeed)
+    monkeypatch.setattr(io_acts, "RESUME_STATE", tmp_path / "data" / "resume_state.json")
+
+    items = [{"target": "factbase", "section": "경력", "kind": "change",
+              "current": "3년차", "proposed": "4년차", "evidence": "PKB 발췌"}]
+    n = io_acts.save_resume_proposals(items, "hash123")
+    assert n == 1
+
+    saved = json.loads((jobfeed / "resume_proposals.json").read_text())
+    assert saved["hash"] == "hash123"
+    expected_id = hashlib.sha1("factbase경력4년차".encode()).hexdigest()[:8]
+    assert saved["items"][0]["id"] == expected_id
+
+    state = json.loads((tmp_path / "data" / "resume_state.json").read_text())
+    assert state["hash"] == "hash123"
+
+
+def test_apply_resume_change_add_remove_and_reports_failures(tmp_path, monkeypatch):
+    _init_repo(tmp_path)
+    jobfeed = tmp_path / "jobfeed"
+    jobfeed.mkdir()
+    monkeypatch.setattr(io_acts, "JOBFEED", jobfeed)
+
+    factbase = tmp_path / "facts.md"
+    factbase.write_text("# 사실베이스\n\n## 경력\n\n3년차 백엔드 엔지니어\n\n"
+                        "## 자격증\n\n정보처리기사\n")
+    jk = tmp_path / "JK.md"
+    jk.write_text("# JK\n\n소개\n")
+    monkeypatch.setattr(io_acts, "FACTBASE", factbase)
+    monkeypatch.setattr(io_acts, "JK_MD", jk)
+    monkeypatch.setattr(io_acts, "_RESUME_TARGETS", {"factbase": factbase, "JK.md": jk})
+
+    items = [
+        {"id": "id-change", "target": "factbase", "section": "경력", "kind": "change",
+         "current": "3년차 백엔드 엔지니어", "proposed": "4년차 백엔드 엔지니어", "evidence": "e"},
+        {"id": "id-remove", "target": "factbase", "section": "자격증", "kind": "remove",
+         "current": "정보처리기사", "proposed": "", "evidence": "e"},
+        {"id": "id-add", "target": "JK.md", "section": "소개", "kind": "add",
+         "current": "", "proposed": "새 프로젝트 경험", "evidence": "e"},
+        {"id": "id-mismatch", "target": "factbase", "section": "경력", "kind": "change",
+         "current": "원문에 없는 문장", "proposed": "x", "evidence": "e"},
+    ]
+    (jobfeed / "resume_proposals.json").write_text(
+        json.dumps({"hash": "h", "items": items}, ensure_ascii=False))
+
+    msg = io_acts.apply_resume(
+        ["id-change", "id-remove", "id-add", "id-mismatch", "id-none"])
+    assert "반영 3건" in msg
+    assert "id-none: 제안 없음" in msg
+    assert "id-mismatch" in msg and "원문 불일치" in msg
+
+    fb_text = factbase.read_text()
+    assert "4년차 백엔드 엔지니어" in fb_text and "3년차" not in fb_text
+    assert "정보처리기사" not in fb_text
+    jk_text = jk.read_text()
+    assert "## 미분류 추가(자동 제안 승인)" in jk_text
+    assert "새 프로젝트 경험" in jk_text
+
+    remaining = json.loads((jobfeed / "resume_proposals.json").read_text())["items"]
+    assert {it["id"] for it in remaining} == {"id-mismatch"}   # 반영분만 제거됨
+
+
+def test_reindex_facts_delegates_to_index_es(monkeypatch):
+    import scripts.index_es as index_es_mod
+    calls = []
+    monkeypatch.setattr(index_es_mod, "index_facts", lambda client: calls.append(client) or 7)
+    monkeypatch.setattr(io_acts, "es", lambda: "fake-client")
+
+    assert io_acts.reindex_facts() == "jobscout_facts: 7건"
+    assert calls == ["fake-client"]

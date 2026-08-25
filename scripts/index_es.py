@@ -60,18 +60,28 @@ def reputation_docs():
                    "content": ln[:1500]}
 
 
+def _index(client, index, source) -> int:
+    if client.indices.exists(index=index):
+        client.indices.delete(index=index)
+    client.indices.create(index=index, mappings=MAPPING)
+    docs = list(source())
+    vecs = embed([d["content"] for d in docs])
+    bulk(client, ({"_index": index, **d, "embedding": v}
+                  for d, v in zip(docs, vecs)))
+    return len(docs)
+
+
+def index_facts(client) -> int:
+    """jobscout_facts만 재생성+색인 — io_acts.reindex_facts()가 ApplyResume 뒤에 재사용."""
+    return _index(client, "jobscout_facts", fact_docs)
+
+
 def main():
     client = es()
-    sources = dict(zip(INDICES, (fact_docs, precedent_docs, reputation_docs)))
-    for index, source in sources.items():
-        if client.indices.exists(index=index):
-            client.indices.delete(index=index)
-        client.indices.create(index=index, mappings=MAPPING)
-        docs = list(source())
-        vecs = embed([d["content"] for d in docs])
-        bulk(client, ({"_index": index, **d, "embedding": v}
-                      for d, v in zip(docs, vecs)))
-        print(f"{index}: {len(docs)}건")
+    n = index_facts(client)
+    print(f"jobscout_facts: {n}건")
+    for index, source in zip(INDICES[1:], (precedent_docs, reputation_docs)):
+        print(f"{index}: {_index(client, index, source)}건")
 
 
 if __name__ == "__main__":

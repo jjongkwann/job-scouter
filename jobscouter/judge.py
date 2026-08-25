@@ -44,6 +44,31 @@ SCORE_SCHEMA = {
     "required": ["scores", "exclude", "confidence", "quotes", "reason"],
 }
 
+# evidence(근거 발췌)가 가장 긴 자유 텍스트라 SCORE_SCHEMA와 같은 이유로 맨 끝에 둔다.
+RESUME_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "proposals": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "enum": ["factbase", "JK.md"]},
+                    "section": {"type": "string", "description": "대상 문서 내 절 제목"},
+                    "kind": {"type": "string", "enum": ["add", "change", "remove"]},
+                    "current": {"type": "string",
+                                "description": "change/remove 대상 원문 그대로. add면 빈 문자열"},
+                    "proposed": {"type": "string",
+                                 "description": "제안 내용(add/change). remove면 빈 문자열"},
+                    "evidence": {"type": "string", "description": "근거 PKB 문서 제목·발췌"},
+                },
+                "required": ["target", "section", "kind", "current", "proposed", "evidence"],
+            },
+        },
+    },
+    "required": ["proposals"],
+}
+
 
 def factbase_hash() -> str:
     return hashlib.sha256(FACTBASE.read_bytes()).hexdigest()[:12]
@@ -162,6 +187,26 @@ def draft_application(company: str, title: str, posting: str) -> dict[str, str]:
     if len(files) < 5:
         raise RuntimeError(f"지원서류 초안 {len(files)}개뿐 — 5개 필요 (재시도)")
     return files
+
+
+@activity.defn
+def propose_resume_update(snapshot_text: str) -> list[dict]:
+    """PKB curated 발췌(snapshot_text)를 사실베이스·JK.md와 대조해 갱신 제안만 낸다.
+    이미 있는 내용은 제외, 날짜·숫자는 PKB 원문 그대로, 추정 금지. id는 여기서
+    안 만든다(io_acts.save_resume_proposals가 내용 해시로 부여)."""
+    system = (
+        "너는 이력서 갱신 제안기다. PKB(개인 지식베이스) 최신 발췌를 사실베이스·JK.md와 "
+        "대조해 반영할 변경만 제안한다. 규칙: 사실베이스·JK.md에 이미 있는 내용은 "
+        "제안하지 않는다. 날짜·숫자는 PKB 원문 그대로 옮기고 추정하지 않는다. "
+        "PKB 발췌에 근거 없는 내용은 절대 제안하지 않는다.\n\n"
+        f"<사실베이스>\n{FACTBASE.read_text()}\n</사실베이스>\n\n"
+        f"<JK.md>\n{JK_MD.read_text()}\n</JK.md>"
+    )
+    prompt = (f"<PKB 발췌>\n{snapshot_text}\n</PKB 발췌>\n\n"
+              "위 PKB 발췌를 기준으로 사실베이스·JK.md 갱신 제안 목록을 만들어라. "
+              "반영할 변경이 없으면 빈 목록을 반환하라.")
+    d = _claude(prompt, system, max_usd=1.0, schema=RESUME_SCHEMA)
+    return list(d["structured_output"]["proposals"])
 
 
 @activity.defn

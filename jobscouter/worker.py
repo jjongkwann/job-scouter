@@ -5,8 +5,10 @@
     uv run python -m jobscouter.worker scan [--budget N]     # DailyScan 시작
     uv run python -m jobscouter.worker publish id1 id2 ...   # Publish 시작 (등재 승인)
     uv run python -m jobscouter.worker reject <id> "<사유>"  # Publish 시작 (거부만)
-    uv run python -m jobscouter.worker status                # 실행 중 DailyScan/Publish 조회
-    uv run python -m jobscouter.worker schedule               # 일 1회 자동 시작 등록
+    uv run python -m jobscouter.worker resume-sync            # ResumeSync 시작
+    uv run python -m jobscouter.worker apply-resume id1 ...   # ApplyResume 시작 (제안 반영)
+    uv run python -m jobscouter.worker status                # 실행 중 사이클 조회
+    uv run python -m jobscouter.worker schedule               # 자동 시작 등록(일 1회 스캔·주 1회 이력서)
 """
 import asyncio
 import sys
@@ -24,9 +26,10 @@ from jobscouter.config import TEMPORAL, Q_IO, Q_WF, PublishParams, ScanParams
 
 
 async def _running_handle(client: Client):
-    """실행 중인 DailyScan/Publish 핸들. 스케줄 시작 워크플로는 id가 매번 달라 검색으로 찾는다."""
+    """실행 중인 사이클 핸들. 스케줄 시작 워크플로는 id가 매번 달라 검색으로 찾는다."""
     async for wf in client.list_workflows(
-            "(WorkflowType='DailyScan' OR WorkflowType='Publish') "
+            "(WorkflowType='DailyScan' OR WorkflowType='Publish' "
+            "OR WorkflowType='ResumeSync' OR WorkflowType='ApplyResume') "
             "AND ExecutionStatus='Running'"):
         return client.get_workflow_handle(wf.id)
     sys.exit("실행 중인 사이클이 없다")
@@ -38,16 +41,20 @@ async def main() -> None:
 
     if cmd == "io":
         from jobscouter import io_acts, search
-        from jobscouter.workflow import DailyScan, Publish
+        from jobscouter.workflow import ApplyResume, DailyScan, Publish, ResumeSync
         acts = [io_acts.run_script, io_acts.load_targets,
                 io_acts.fetch_requirements, io_acts.commit_rows,
                 io_acts.sync_repo, io_acts.save_proposals,
                 io_acts.load_proposals, io_acts.reject_proposals,
                 io_acts.commit_outputs, io_acts.fetch_posting_full,
-                io_acts.write_application, search.search_context]
+                io_acts.write_application, search.search_context,
+                io_acts.pkb_snapshot, io_acts.resume_state_hash,
+                io_acts.save_resume_proposals, io_acts.apply_resume,
+                io_acts.reindex_facts]
         ex = ThreadPoolExecutor(4)
         workers = [
-            Worker(client, task_queue=Q_WF, workflows=[DailyScan, Publish]),
+            Worker(client, task_queue=Q_WF,
+                   workflows=[DailyScan, Publish, ResumeSync, ApplyResume]),
             Worker(client, task_queue=Q_IO, activities=acts, activity_executor=ex),
         ]
         print(f"io 워커 시작 — {TEMPORAL} / {Q_WF}, {Q_IO}")
@@ -84,6 +91,21 @@ async def main() -> None:
             id=f"publish-{uuid.uuid4()}", task_queue=Q_WF)
         print(f"시작: {handle.id}")
 
+    elif cmd == "resume-sync":
+        from jobscouter.workflow import ResumeSync
+        handle = await client.start_workflow(
+            ResumeSync.run, id="resume-sync-manual", task_queue=Q_WF)
+        print(f"시작: {handle.id}")
+
+    elif cmd == "apply-resume":
+        ids = sys.argv[2:]
+        if not ids:
+            sys.exit("사용: worker apply-resume id1 id2 ...")
+        from jobscouter.workflow import ApplyResume
+        handle = await client.start_workflow(
+            ApplyResume.run, ids, id=f"apply-resume-{uuid.uuid4()}", task_queue=Q_WF)
+        print(f"시작: {handle.id}")
+
     elif cmd == "status":
         h = await _running_handle(client)
         print(await h.query("status"))
@@ -96,7 +118,8 @@ async def main() -> None:
         from jobscouter.config import Q_LLM
         worker = Worker(
             client, task_queue=Q_LLM,
-            activities=[judge_mod.judge, judge_mod.report, judge_mod.draft_application],
+            activities=[judge_mod.judge, judge_mod.report, judge_mod.draft_application,
+                       judge_mod.propose_resume_update],
             activity_executor=ThreadPoolExecutor(2),
             max_task_queue_activities_per_second=0.5)  # 레이트리밋은 큐 레벨
         print(f"llm 워커 시작 — {TEMPORAL} / {Q_LLM}")
@@ -107,7 +130,7 @@ async def main() -> None:
         from temporalio.client import (Schedule, ScheduleActionStartWorkflow,
                                        ScheduleOverlapPolicy, SchedulePolicy,
                                        ScheduleSpec)
-        from jobscouter.workflow import DailyScan
+        from jobscouter.workflow import DailyScan, ResumeSync
         await client.create_schedule(
             "daily-scan",
             Schedule(
@@ -118,12 +141,23 @@ async def main() -> None:
                                   time_zone_name="Asia/Seoul"),
                 policy=SchedulePolicy(overlap=ScheduleOverlapPolicy.SKIP),
             ))
+        await client.create_schedule(
+            "resume-sync",
+            Schedule(
+                action=ScheduleActionStartWorkflow(
+                    ResumeSync.run,
+                    id="resume-sync", task_queue=Q_WF),
+                spec=ScheduleSpec(cron_expressions=["0 8 * * 1"],
+                                  time_zone_name="Asia/Seoul"),   # 매주 월 08:00 KST
+                policy=SchedulePolicy(overlap=ScheduleOverlapPolicy.SKIP),
+            ))
         try:
             await client.get_schedule_handle("job-scout-weekly").delete()
             deleted = "삭제됨"
         except RPCError:
             deleted = "없었음"
-        print(f"스케줄 등록: 매일 09:07 KST daily-scan — job-scout-weekly {deleted}")
+        print("스케줄 등록: 매일 09:07 KST daily-scan · 매주 월 08:00 KST resume-sync"
+              f" — job-scout-weekly {deleted}")
 
     else:
         sys.exit(f"모르는 명령: {cmd}")

@@ -13,8 +13,8 @@ from temporalio.client import Client
 
 from jobscouter.config import (APPLICATIONS, DRAFTS, FACTBASE, JK_MD,
                                 JOBFEED, PROPOSALS, Q_WF, REFERENCES,
-                                TEMPORAL, PublishParams, _norm)
-from jobscouter.workflow import Publish
+                                RESUME_PROPOSALS, TEMPORAL, PublishParams, _norm)
+from jobscouter.workflow import ApplyResume, Publish
 
 # docs_url 등 기본 라우트를 끈다 — /docs는 이 앱의 문서 열람 라우트가 쓴다
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
@@ -95,6 +95,28 @@ _DASHBOARD = _jenv.from_string("""
 {% else %}<p>없음</p>{% endif %}
 """)
 
+_RESUME_PROPOSALS = _jenv.from_string("""
+<p><a href="/resume">이력서 보기로 돌아가기</a></p>
+<form method="post" action="/resume/apply">
+<table>
+<tr><th>대상</th><th>섹션</th><th>종류</th><th>현재 → 제안</th><th>근거</th><th>반영</th></tr>
+{% for it in items %}
+<tr>
+<td>{{ it.target }}</td>
+<td>{{ it.section }}</td>
+<td>{{ it.kind }}</td>
+<td>{% if it.current %}<del>{{ it.current }}</del><br>{% endif %}→ {{ it.proposed }}</td>
+<td>{{ it.evidence }}</td>
+<td><input type="checkbox" name="apply" value="{{ it.id }}"></td>
+</tr>
+{% else %}
+<tr><td colspan="6">대기 중인 제안 없음</td></tr>
+{% endfor %}
+</table>
+<button type="submit">반영</button>
+</form>
+""")
+
 
 def _render(title: str, body: str) -> HTMLResponse:
     return HTMLResponse(_BASE.render(title=title, body=body))
@@ -144,6 +166,14 @@ async def start_publish(ids: list[str], rejects: list[dict]) -> str:
     handle = await client.start_workflow(
         Publish.run, PublishParams(ids=list(ids), rejects=rejects),
         id=f"publish-{uuid4().hex[:8]}", task_queue=Q_WF)
+    return handle.id
+
+
+async def start_apply_resume(ids: list[str]) -> str:
+    client = await Client.connect(TEMPORAL)
+    handle = await client.start_workflow(
+        ApplyResume.run, list(ids),
+        id=f"apply-resume-{uuid4().hex[:8]}", task_queue=Q_WF)
     return handle.id
 
 
@@ -222,7 +252,28 @@ def resume():
     if DRAFTS.exists():
         for p in sorted(DRAFTS.glob("*.md")):
             sections.append((p.name, _render_md(p.read_text())))
-    return _render("이력서", _SECTIONS.render(sections=sections))
+    body = '<p><a href="/resume/proposals">갱신 제안 보기</a></p>' + _SECTIONS.render(sections=sections)
+    return _render("이력서", body)
+
+
+def _load_resume_proposals() -> list[dict]:
+    path = JOBFEED / RESUME_PROPOSALS
+    if not path.exists():
+        return []
+    return json.loads(path.read_text()).get("items", [])
+
+
+@app.get("/resume/proposals", response_class=HTMLResponse)
+def resume_proposals():
+    return _render("이력서 갱신 제안", _RESUME_PROPOSALS.render(items=_load_resume_proposals()))
+
+
+@app.post("/resume/apply")
+async def resume_apply(request: Request):
+    form = await request.form()
+    ids = form.getlist("apply")
+    await start_apply_resume(list(ids))
+    return RedirectResponse("/resume/proposals", status_code=302)
 
 
 @app.get("/applications", response_class=HTMLResponse)

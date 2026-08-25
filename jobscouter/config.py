@@ -21,6 +21,19 @@ PY = _env("JOBSCOUTER_PY", sys.executable)
 Q_WF, Q_IO, Q_LLM = "jobscout-wf", "jobscout-io", "jobscout-llm"
 JUDGE_MODEL = _env("JOBSCOUTER_MODEL", "claude-sonnet-5")
 PROPOSALS = "proposals.json"   # JOBFEED 아래 — 판정됐지만 등재/거부 전인 후보
+RESUME_PROPOSALS = "resume_proposals.json"   # JOBFEED 아래 — ResumeSync 제안, 사람 승인 대기
+
+PKB_INDEX = "pkb_documents"   # 미니 ES — 개인 지식베이스. ResumeSync만 읽는다(쓰기 금지)
+# personal-docs/src/pkb/retrieve.py의 profile_filter("curated")는 doc_type이
+# concept/guide/moc이고 status가 canonical/active인 문서만 남긴다. 2026-08-25 실측 기준
+# 그 조건을 만족하는 카테고리는 전부 "agent"(기술 학습 노트)뿐이라 경력·프로젝트 발췌로는
+# 못 쓴다 — 그래서 카테고리를 별도로 좁힌다. 같은 시점 category terms 집계
+# (`curl .../pkb_documents/_search -d '{"size":0,"aggs":{"c":{"terms":{"field":"category","size":50}}}}'`)
+# 전체 32개 중 경력·프로젝트·자기소개 성격인 career(1956건)·about(129건)·
+# "상용 서비스 개발 및 운영"(240건)만 기본값으로 선택 — backend·spring·redis 등
+# 나머지는 기술 학습 노트라 이력서 갱신 근거로 부적절해 제외했다. 사용자가 PKB에서
+# 이 카테고리 문서를 canonical/active로 승격하면 다음 ResumeSync부터 반영된다.
+PKB_CATEGORIES = _env("JOBSCOUTER_PKB_CATEGORIES", "career,about,상용 서비스 개발 및 운영")
 
 # 데이터 repo 레이아웃(JOBFEED.parent가 루트) — 웹앱 열람·지원서류 초안이 쓴다
 JK_MD = JOBFEED.parent / "JK.md"

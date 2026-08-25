@@ -9,7 +9,7 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 
 from jobscouter.config import PublishParams, ScanParams
-from jobscouter.workflow import DailyScan, Publish
+from jobscouter.workflow import ApplyResume, DailyScan, Publish, ResumeSync
 
 RAN: list[str] = []
 SAVED: list[list[dict]] = []
@@ -224,6 +224,111 @@ async def test_publish_commits_approved_and_rejects():
         assert out["report"]
         assert out["outputs"] == "커밋됨"
         assert out["drafts"] == {"p0": "applications/c-p0"}   # approved 1건 → 초안 완료
+    finally:
+        await env.shutdown()
+
+
+PROPOSE_CALLS: list[str] = []
+SAVED_RESUME: list[tuple] = []
+APPLIED_IDS: list[list] = []
+
+
+@activity.defn(name="pkb_snapshot")
+async def fake_pkb_snapshot() -> dict:
+    return {"hash": "H1", "text": "PKB 발췌", "docs": 3}
+
+
+@activity.defn(name="resume_state_hash")
+async def fake_resume_state_hash_same() -> str:
+    return "H1"   # pkb_snapshot과 동일 → 변화 없음
+
+
+@activity.defn(name="resume_state_hash")
+async def fake_resume_state_hash_diff() -> str:
+    return "H0"   # pkb_snapshot과 다름 → 변화 있음
+
+
+@activity.defn(name="propose_resume_update")
+async def fake_propose_resume_update(snapshot_text: str) -> list[dict]:
+    PROPOSE_CALLS.append(snapshot_text)
+    return [{"target": "factbase", "section": "경력", "kind": "change",
+             "current": "3년차", "proposed": "4년차", "evidence": "e"}]
+
+
+@activity.defn(name="save_resume_proposals")
+async def fake_save_resume_proposals(items: list[dict], hash: str) -> int:
+    SAVED_RESUME.append((items, hash))
+    return len(items)
+
+
+@activity.defn(name="apply_resume")
+async def fake_apply_resume(ids: list[str]) -> str:
+    APPLIED_IDS.append(ids)
+    return f"반영 {len(ids)}건"
+
+
+@activity.defn(name="reindex_facts")
+async def fake_reindex_facts() -> str:
+    return "jobscout_facts: 5건"
+
+
+async def _run_resume_sync(client: Client, resume_hash_act) -> dict:
+    q = f"test-{uuid.uuid4()}"
+    acts = [fake_sync_repo, fake_pkb_snapshot, resume_hash_act,
+           fake_propose_resume_update, fake_save_resume_proposals]
+    async with Worker(client, task_queue=q, workflows=[ResumeSync], activities=acts,
+                      workflow_runner=UnsandboxedWorkflowRunner()):
+        import jobscouter.workflow as wf
+        wf._IO_OPTS["task_queue"] = q
+        wf._LLM_OPTS["task_queue"] = q
+        handle = await client.start_workflow(
+            ResumeSync.run, id=f"wf-{uuid.uuid4()}", task_queue=q)
+        return await handle.result()
+
+
+@pytest.mark.asyncio
+async def test_resume_sync_no_change_skips_propose():
+    """해시가 같으면 propose_resume_update를 아예 호출하지 않는다 — LLM 0."""
+    env = await WorkflowEnvironment.start_time_skipping()
+    try:
+        PROPOSE_CALLS.clear()
+        out = await _run_resume_sync(env.client, fake_resume_state_hash_same)
+        assert out == {"changed": False, "docs": 3}
+        assert PROPOSE_CALLS == []
+    finally:
+        await env.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_resume_sync_change_calls_propose_and_saves():
+    env = await WorkflowEnvironment.start_time_skipping()
+    try:
+        PROPOSE_CALLS.clear()
+        SAVED_RESUME.clear()
+        out = await _run_resume_sync(env.client, fake_resume_state_hash_diff)
+        assert out == {"changed": True, "docs": 3, "proposals": 1}
+        assert PROPOSE_CALLS == ["PKB 발췌"]
+        assert SAVED_RESUME[0][1] == "H1"   # pkb_snapshot 해시로 저장
+    finally:
+        await env.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_apply_resume_workflow_applies_then_reindexes():
+    env = await WorkflowEnvironment.start_time_skipping()
+    try:
+        APPLIED_IDS.clear()
+        q = f"test-{uuid.uuid4()}"
+        async with Worker(env.client, task_queue=q, workflows=[ApplyResume],
+                          activities=[fake_sync_repo, fake_apply_resume, fake_reindex_facts],
+                          workflow_runner=UnsandboxedWorkflowRunner()):
+            import jobscouter.workflow as wf
+            wf._IO_OPTS["task_queue"] = q
+            handle = await env.client.start_workflow(
+                ApplyResume.run, ["id1", "id2"], id=f"wf-{uuid.uuid4()}", task_queue=q)
+            out = await handle.result()
+            assert APPLIED_IDS == [["id1", "id2"]]
+            assert out == {"applied": "반영 2건", "reindexed": "jobscout_facts: 5건"}
     finally:
         await env.shutdown()
 

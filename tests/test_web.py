@@ -19,6 +19,13 @@ def repo(tmp_path, monkeypatch):
                 "confidence": 0.9, "rubric_version": "v1", "judged_at": "2026-08-24"},
     }, ensure_ascii=False))
     (jobfeed / "후보목록.html").write_text("<html><body>후보목록 본문</body></html>")
+    (jobfeed / "resume_proposals.json").write_text(json.dumps({
+        "hash": "h1",
+        "items": [
+            {"id": "abc12345", "target": "factbase", "section": "경력", "kind": "change",
+             "current": "3년차 백엔드", "proposed": "4년차 백엔드", "evidence": "PKB: 경력노트"},
+        ],
+    }, ensure_ascii=False))
     (jobfeed / "reports").mkdir()
     (jobfeed / "reports" / "x.md").write_text("# 보고서\n\n내용입니다")
     # 「테스트회사」는 여기 없어야 「평판 미조사 회사」에 뜬다
@@ -97,6 +104,33 @@ def test_publish_starts_workflow_with_ids_and_rejects(client, monkeypatch):
     assert r.status_code == 302
     assert r.headers["location"] == "/"
     assert calls == [(["111"], [{"id": "222", "why": "연봉 미공개"}])]
+
+
+def test_resume_links_to_proposals(client):
+    r = client.get("/resume")
+    assert "/resume/proposals" in r.text
+
+
+def test_resume_proposals_shows_items(client):
+    r = client.get("/resume/proposals")
+    assert r.status_code == 200
+    assert "factbase" in r.text and "경력" in r.text
+    assert "4년차 백엔드" in r.text
+
+
+def test_resume_apply_starts_workflow(client, monkeypatch):
+    calls = []
+
+    async def fake_start_apply_resume(ids):
+        calls.append(ids)
+        return "apply-resume-test"
+
+    monkeypatch.setattr(web, "start_apply_resume", fake_start_apply_resume)
+    r = client.post("/resume/apply", data={"apply": "abc12345"}, follow_redirects=False)
+
+    assert r.status_code == 302
+    assert r.headers["location"] == "/resume/proposals"
+    assert calls == [["abc12345"]]
 
 
 def test_safe_url_blocks_non_http():

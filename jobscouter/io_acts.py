@@ -1,4 +1,5 @@
 """io 큐 activity — 자격증명 없음. jobfeed 스크립트 subprocess + 공개 API."""
+import hashlib
 import json
 import re
 import ssl
@@ -8,13 +9,32 @@ from datetime import date
 
 from temporalio import activity
 
-from jobscouter.config import APP_FILES, APPLICATIONS, JOBFEED, PROPOSALS, PY, Target, _norm
+from jobscouter.config import (APP_FILES, APPLICATIONS, FACTBASE, JK_MD, JOBFEED,
+                                PKB_CATEGORIES, PKB_INDEX, PROPOSALS, PY,
+                                RESUME_PROPOSALS, Target, _norm)
+from jobscouter.search import es
 
 
 SCRIPTS = {"fetch_jobs.py", "refresh_due.py", "build.py"}
 # proposals.json에 남기는 필드 — usage·exclude·cached는 판정 내부용이라 뺀다
 PROP_FIELDS = ["id", "company", "title", "url", "src", "scores", "total",
                "reason", "quotes", "confidence", "rubric_version"]
+RESUME_STATE = JOBFEED.parent / "data" / "resume_state.json"   # 데이터 repo 내 — 마지막 반영 PKB 해시
+PKB_TEXT_CAP = 40_000   # propose_resume_update 입력용 캡
+_ADD_HEADING = "## 미분류 추가(자동 제안 승인)"
+# personal-docs/src/pkb/retrieve.py profile_filter("curated") 그대로 재현
+_PKB_PROFILE_FILTER = [
+    {"terms": {"doc_type": ["concept", "guide", "moc"]}},
+    {"terms": {"status": ["canonical", "active"]}},
+]
+# 같은 파일 _lifecycle_filter(include_archived=False) 그대로 재현
+_PKB_LIFECYCLE_FILTER = [
+    {"bool": {"must_not": {"exists": {"field": "archived_at"}}}},
+    {"bool": {"should": [
+        {"bool": {"must_not": {"exists": {"field": "expires_at"}}}},
+        {"range": {"expires_at": {"gt": "now"}}},
+    ], "minimum_should_match": 1}},
+]
 
 try:  # python.org 빌드 대비 — fetch_jobs.py와 동일 처리
     import certifi
@@ -303,3 +323,118 @@ def commit_outputs() -> str:
     if not names:
         return "변경 없음"
     return _commit_and_push([f"jobfeed/{n}" for n in names], "job-scouter: publish 산출물")
+
+
+@activity.defn
+def pkb_snapshot() -> dict:
+    """PKB curated 프로필(경력·프로젝트 카테고리만) 스냅샷. 읽기 전용 — PKB 인덱스에
+    쓰거나 지우지 않는다. content를 doc_id·chunk_index 순으로 이어 붙여 sha256 해시를
+    낸 뒤(전체 기준 — 40k 밖에서 바뀌어도 변화 감지), text는 40k자에서 doc 단위로 잘라
+    표기한다. 반환: {hash, text, docs}(docs = ES hit 개수)."""
+    cats = [c.strip() for c in PKB_CATEGORIES.split(",") if c.strip()]
+    filt = [{"terms": {"category": cats}}, *_PKB_PROFILE_FILTER, *_PKB_LIFECYCLE_FILTER]
+    res = es().search(index=PKB_INDEX, size=10_000,
+                      query={"bool": {"filter": filt}},
+                      sort=[{"doc_id": "asc"}, {"chunk_index": "asc"}],
+                      source=["content", "doc_id", "chunk_index"])
+    hits = res["hits"]["hits"]
+    contents = [h["_source"]["content"] for h in hits]
+    full = "\n\n".join(contents)
+    digest = hashlib.sha256(full.encode()).hexdigest()
+
+    parts, total = [], 0
+    for c in contents:
+        if total + len(c) > PKB_TEXT_CAP:
+            parts.append("[... 이하 잘림 ...]")
+            break
+        parts.append(c)
+        total += len(c)
+    return {"hash": digest, "text": "\n\n".join(parts), "docs": len(hits)}
+
+
+@activity.defn
+def resume_state_hash() -> str:
+    """data/resume_state.json에 남은 마지막 반영 PKB 해시. 없으면 빈 문자열."""
+    if not RESUME_STATE.exists():
+        return ""
+    return json.loads(RESUME_STATE.read_text()).get("hash", "")
+
+
+@activity.defn
+def save_resume_proposals(items: list[dict], hash: str) -> int:
+    """제안 각각에 id(sha1(target+section+proposed)[:8])를 부여해
+    jobfeed/resume_proposals.json + data/resume_state.json에 저장. commit+push."""
+    for it in items:
+        it["id"] = hashlib.sha1(
+            f"{it['target']}{it['section']}{it['proposed']}".encode()).hexdigest()[:8]
+    path = JOBFEED / RESUME_PROPOSALS
+    path.write_text(json.dumps({"hash": hash, "items": items}, ensure_ascii=False, indent=1))
+    RESUME_STATE.parent.mkdir(parents=True, exist_ok=True)
+    RESUME_STATE.write_text(json.dumps({"hash": hash}, ensure_ascii=False, indent=1))
+    _commit_and_push(
+        [f"jobfeed/{RESUME_PROPOSALS}", str(RESUME_STATE.relative_to(JOBFEED.parent))],
+        f"resume: 갱신 제안 {len(items)}건")
+    return len(items)
+
+
+_RESUME_TARGETS = {"factbase": FACTBASE, "JK.md": JK_MD}
+
+
+@activity.defn
+def apply_resume(ids: list[str]) -> str:
+    """승인 항목을 사실베이스·JK.md에 반영. change=current를 proposed로 정확 치환,
+    add=대상 파일 끝 `## 미분류 추가(자동 제안 승인)` 절에 append, remove=current 삭제.
+    원문 불일치 등 실패 항목은 건너뛰고 보고. 반영분은 proposals에서 제거. commit+push."""
+    path = JOBFEED / RESUME_PROPOSALS
+    data = json.loads(path.read_text()) if path.exists() else {"hash": "", "items": []}
+    items = data.get("items", [])
+    by_id = {it["id"]: it for it in items}
+
+    applied, failed = [], []
+    for pid in ids:
+        it = by_id.get(pid)
+        if not it:
+            failed.append(f"{pid}: 제안 없음")
+            continue
+        target = _RESUME_TARGETS.get(it["target"])
+        if target is None or not target.exists():
+            failed.append(f"{pid}: 알 수 없는 대상 {it['target']}")
+            continue
+        text = target.read_text()
+        kind = it["kind"]
+        if kind in ("change", "remove") and it["current"] not in text:
+            failed.append(f"{pid}: 원문 불일치 — 건너뜀")
+            continue
+        if kind == "change":
+            text = text.replace(it["current"], it["proposed"], 1)
+        elif kind == "remove":
+            text = text.replace(it["current"], "", 1)
+        elif kind == "add":
+            if _ADD_HEADING not in text:
+                text = text.rstrip("\n") + f"\n\n{_ADD_HEADING}\n\n{it['proposed']}\n"
+            else:
+                text = text.rstrip("\n") + f"\n\n{it['proposed']}\n"
+        else:
+            failed.append(f"{pid}: 알 수 없는 kind {kind}")
+            continue
+        target.write_text(text)
+        applied.append(pid)
+
+    remaining = [it for it in items if it["id"] not in applied]
+    path.write_text(json.dumps({**data, "items": remaining}, ensure_ascii=False, indent=1))
+    paths = [str(p.relative_to(JOBFEED.parent)) for p in set(_RESUME_TARGETS.values())] \
+        + [f"jobfeed/{RESUME_PROPOSALS}"]
+    _commit_and_push(paths, f"resume: 자동 제안 반영 {len(applied)}건")
+
+    msg = f"반영 {len(applied)}건"
+    if failed:
+        msg += " · 실패: " + "; ".join(failed)
+    return msg
+
+
+@activity.defn
+def reindex_facts() -> str:
+    """사실베이스 반영 후 jobscout_facts 재색인 — ApplyResume 마지막 단계."""
+    from scripts.index_es import index_facts
+    n = index_facts(es())
+    return f"jobscout_facts: {n}건"

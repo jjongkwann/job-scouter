@@ -94,3 +94,29 @@ def test_draft_application_raises_if_fewer_than_5(tmp_path, monkeypatch):
         "result": "=== FILE: 0_JD.md ===\n내용만 하나"})
     with pytest.raises(RuntimeError, match="5개"):
         J.draft_application("회사", "포지션", "공고 전문")
+
+
+def test_propose_resume_update_reads_factbase_and_jk_and_uses_schema(tmp_path, monkeypatch):
+    monkeypatch.setattr(J, "FACTBASE", tmp_path / "facts.md")
+    (tmp_path / "facts.md").write_text("## 경력\n\n3년차 백엔드")
+    monkeypatch.setattr(J, "JK_MD", tmp_path / "JK.md")
+    (tmp_path / "JK.md").write_text("JK 소개")
+    called = []
+
+    def fake_claude(prompt, system, max_usd, schema=None, timeout=240):
+        called.append((prompt, system, max_usd, schema))
+        return {"structured_output": {"proposals": [
+            {"target": "factbase", "section": "경력", "kind": "change",
+             "current": "3년차 백엔드", "proposed": "4년차 백엔드", "evidence": "PKB: 경력노트"},
+        ]}}
+
+    monkeypatch.setattr(J, "_claude", fake_claude)
+    out = J.propose_resume_update("PKB 발췌 텍스트")
+    assert out == [{"target": "factbase", "section": "경력", "kind": "change",
+                    "current": "3년차 백엔드", "proposed": "4년차 백엔드",
+                    "evidence": "PKB: 경력노트"}]
+    prompt, system, max_usd, schema = called[0]
+    assert "3년차 백엔드" in system and "JK 소개" in system   # 사실베이스·JK.md를 직접 읽음
+    assert "PKB 발췌 텍스트" in prompt
+    assert schema is J.RESUME_SCHEMA
+    assert "id" not in out[0]   # id는 io_acts가 부여

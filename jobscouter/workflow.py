@@ -177,3 +177,66 @@ class Publish:
 
         self._stage = "완료"
         return out
+
+
+@workflow.defn
+class ResumeSync:
+    """주 1회 무인: PKB curated 스냅샷 → 해시 게이트(변화 없으면 LLM 0) → 갱신 제안."""
+
+    def __init__(self) -> None:
+        self._stage = "시작"
+
+    @workflow.query
+    def status(self) -> dict:
+        return {"stage": self._stage}
+
+    @workflow.run
+    async def run(self) -> dict:
+        self._stage = "동기화"
+        await workflow.execute_activity("sync_repo", **_IO_OPTS)
+
+        self._stage = "PKB 스냅샷"
+        snap = await workflow.execute_activity("pkb_snapshot", **_IO_OPTS)
+
+        self._stage = "해시 비교"
+        prev = await workflow.execute_activity("resume_state_hash", **_IO_OPTS)
+        if snap["hash"] == prev:
+            self._stage = "완료"
+            return {"changed": False, "docs": snap["docs"]}
+
+        self._stage = "제안 생성"
+        proposals = await workflow.execute_activity(
+            "propose_resume_update", snap["text"], **_LLM_OPTS)
+
+        self._stage = "저장"
+        n = await workflow.execute_activity(
+            "save_resume_proposals", args=[proposals, snap["hash"]], **_IO_OPTS)
+
+        self._stage = "완료"
+        return {"changed": True, "docs": snap["docs"], "proposals": n}
+
+
+@workflow.defn
+class ApplyResume:
+    """웹앱 승인 버튼이 시작. 사실베이스·JK.md에 승인 항목 반영 → 사실 재색인."""
+
+    def __init__(self) -> None:
+        self._stage = "시작"
+
+    @workflow.query
+    def status(self) -> dict:
+        return {"stage": self._stage}
+
+    @workflow.run
+    async def run(self, ids: list[str]) -> dict:
+        self._stage = "동기화"
+        await workflow.execute_activity("sync_repo", **_IO_OPTS)
+
+        self._stage = "반영"
+        applied = await workflow.execute_activity("apply_resume", ids, **_IO_OPTS)
+
+        self._stage = "재색인"
+        reindexed = await workflow.execute_activity("reindex_facts", **_IO_OPTS)
+
+        self._stage = "완료"
+        return {"applied": applied, "reindexed": reindexed}
