@@ -46,10 +46,18 @@ def _has_remote(repo: str) -> bool:
 @activity.defn
 def sync_repo() -> str:
     """사이클 시작 시 jobfeed repo를 원격과 동기화(미니 워커 ↔ 맥북).
-    원격 없으면(맥북 단독 개발) 예외 없이 생략."""
+    원격 없으면(맥북 단독 개발) 예외 없이 생략. pull 전 워킹트리가 더러우면(이전
+    실행이 fetch 산출물을 커밋 못 하고 끝난 경우) stash 대신 그대로 커밋한다 —
+    단순·결정적이고, 남은 흔적은 사람이 히스토리에서 나중에 봐도 된다."""
     repo = str(JOBFEED.parent)
     if not _has_remote(repo):
         return "원격 없음 — 동기화 생략"
+    status = subprocess.run(["git", "-C", repo, "status", "--porcelain"],
+                            capture_output=True, text=True, timeout=30).stdout
+    if status.strip():
+        subprocess.run(["git", "-C", repo, "add", "-A"], check=True)
+        subprocess.run(["git", "-C", repo, "commit", "-m", "job-scouter: 미커밋 산출물 정리"],
+                       capture_output=True, text=True)
     r = subprocess.run(["git", "-C", repo, "pull", "--ff-only"],
                        capture_output=True, text=True, timeout=120)
     out = (r.stdout + r.stderr).strip()
@@ -154,24 +162,29 @@ def commit_rows(approved: list[dict], dry_run: bool = False) -> str:
     return msg
 
 
-def _commit_and_push(paths: list[str], message: str) -> None:
+def _commit_and_push(paths: list[str], message: str) -> str:
+    """git add한 paths를 커밋(+원격 있으면 push). 변경 없으면 git commit이 자연히
+    no-op — 여기서 따로 diff를 재구현하지 않는다."""
     repo = str(JOBFEED.parent)
     subprocess.run(["git", "-C", repo, "add", *paths], check=True)
     r = subprocess.run(["git", "-C", repo, "commit", "-m", message],
                        capture_output=True, text=True)
+    msg = "커밋됨" if r.returncode == 0 else (r.stdout + r.stderr).strip()
     if r.returncode == 0 and _has_remote(repo):
         p = subprocess.run(["git", "-C", repo, "push"], capture_output=True, text=True)
         if p.returncode != 0:
             raise RuntimeError(f"git push 실패\n{p.stdout + p.stderr}")
+        msg += " · push됨"
+    return msg
 
 
 @activity.defn
 def save_proposals(judged: list[dict]) -> int:
     """비제외 judged를 proposals.json에 id로 병합 + 이미 등재·거부된 id 정리.
-    변화 없으면(빈 judged, 새로 지울 것도 없음) 커밋 생략. 반환: 현재 proposals 건수."""
+    같은 커밋에 jobs.jsonl·new.md(fetch 산출물, 존재하는 것만)도 실어야 다음
+    사이클의 sync_repo pull이 dirty 파일 충돌 없이 끝난다. 반환: 현재 proposals 건수."""
     path = JOBFEED / PROPOSALS
-    before = json.loads(path.read_text()) if path.exists() else {}
-    props = dict(before)
+    props = json.loads(path.read_text()) if path.exists() else {}
     for j in judged:
         rec = {k: j[k] for k in PROP_FIELDS}
         rec["judged_at"] = date.today().isoformat()
@@ -180,11 +193,11 @@ def save_proposals(judged: list[dict]) -> int:
     cand = json.loads((JOBFEED / "candidates.json").read_text())
     known = {str(r[2]) for r in cand["rows"]} | set(cand["skipped"])
     props = {pid: rec for pid, rec in props.items() if pid not in known}
-
-    if props == before:
-        return len(props)
     path.write_text(json.dumps(props, ensure_ascii=False, indent=1))
-    _commit_and_push([f"jobfeed/{PROPOSALS}"], f"job-scouter: proposals {len(props)}건")
+
+    names = [n for n in ("jobs.jsonl", "new.md", PROPOSALS) if (JOBFEED / n).exists()]
+    _commit_and_push([f"jobfeed/{n}" for n in names],
+                     f"job-scouter: 스캔 — 신규 {len(judged)}건, proposals {len(props)}건")
     return len(props)
 
 
@@ -214,3 +227,12 @@ def reject_proposals(rejects: list[dict]) -> int:
     _commit_and_push(["jobfeed/candidates.json", f"jobfeed/{PROPOSALS}"],
                      f"job-scouter: 제외 {len(rejects)}건")
     return len(rejects)
+
+
+@activity.defn
+def commit_outputs() -> str:
+    """Publish 마지막 — refresh_due·build 산출물(candidates.json·reports/)을 커밋."""
+    names = [n for n in ("candidates.json", "reports") if (JOBFEED / n).exists()]
+    if not names:
+        return "커밋 대상 없음"
+    return _commit_and_push([f"jobfeed/{n}" for n in names], "job-scouter: publish 산출물")

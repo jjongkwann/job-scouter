@@ -125,6 +125,36 @@ def test_reject_proposals_records_skipped(tmp_path, monkeypatch):
     assert "777" not in props
 
 
+def test_sync_repo_commits_dirty_output_before_pull(tmp_path, monkeypatch):
+    """fetch 산출물(jobs.jsonl 등)이 커밋 안 된 채 남아 있으면 stash 대신 그대로
+    커밋한 뒤 pull한다 — 다음 사이클 pull이 dirty 충돌로 안 죽게."""
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "clone", str(remote), str(repo)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True)
+    (repo / "README.md").write_text("x")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-m", "init"],
+                   check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "push", "-u", "origin", "HEAD"],
+                   check=True, capture_output=True)
+
+    (repo / "jobfeed").mkdir()
+    (repo / "jobfeed" / "jobs.jsonl").write_text('{"id":1}')   # 커밋 안 된 fetch 산출물
+
+    monkeypatch.setattr(io_acts, "JOBFEED", repo / "jobfeed")
+    io_acts.sync_repo()
+
+    status = subprocess.run(["git", "-C", str(repo), "status", "--porcelain"],
+                            capture_output=True, text=True).stdout
+    assert status == ""
+    subject = subprocess.run(["git", "-C", str(repo), "log", "-1", "--format=%s"],
+                             capture_output=True, text=True).stdout.strip()
+    assert subject == "job-scouter: 미커밋 산출물 정리"
+
+
 def test_sync_repo_pulls_when_remote_exists(monkeypatch, tmp_path):
     monkeypatch.setattr(io_acts, "JOBFEED", tmp_path / "jobfeed")
     calls = []
@@ -133,6 +163,8 @@ def test_sync_repo_pulls_when_remote_exists(monkeypatch, tmp_path):
         calls.append(cmd)
         if cmd[3] == "remote":
             return subprocess.CompletedProcess(cmd, 0, stdout="origin\n", stderr="")
+        if cmd[3] == "status":
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")   # 깨끗함
         if cmd[3] == "pull":
             return subprocess.CompletedProcess(cmd, 0, stdout="Already up to date.\n", stderr="")
         raise AssertionError(cmd)

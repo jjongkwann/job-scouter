@@ -43,7 +43,7 @@ async def main() -> None:
                 io_acts.fetch_requirements, io_acts.commit_rows,
                 io_acts.sync_repo, io_acts.save_proposals,
                 io_acts.load_proposals, io_acts.reject_proposals,
-                search.search_context]
+                io_acts.commit_outputs, search.search_context]
         ex = ThreadPoolExecutor(4)
         workers = [
             Worker(client, task_queue=Q_WF, workflows=[DailyScan, Publish]),

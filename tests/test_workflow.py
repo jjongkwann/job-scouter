@@ -96,10 +96,15 @@ async def fake_report(stats: dict) -> str:
     return "jobfeed/reports/2026-08-24_자동사이클.md"
 
 
+@activity.defn(name="commit_outputs")
+async def fake_commit_outputs() -> str:
+    return "커밋됨"
+
+
 _SCAN_ACTS = [fake_sync_repo, fake_run_script, fake_load_targets, fake_fetch_requirements,
              fake_search_context, fake_judge, fake_save_proposals]
 _PUB_ACTS = [fake_sync_repo, fake_load_proposals, fake_commit_rows, fake_reject_proposals,
-            fake_save_proposals, fake_run_script, fake_report]
+            fake_save_proposals, fake_run_script, fake_report, fake_commit_outputs]
 
 
 async def _run_scan(client: Client, params: ScanParams | None = None) -> dict:
@@ -199,6 +204,7 @@ async def test_publish_commits_approved_and_rejects():
         assert out["commit"] == "등재 1건"
         assert out["reject"] == 1
         assert out["report"]
+        assert out["commit_outputs"] == "커밋됨"
     finally:
         await env.shutdown()
 

@@ -153,5 +153,8 @@ class Publish:
         }
         out["report"] = await workflow.execute_activity("report", stats, **_LLM_OPTS)
 
+        self._stage = "산출물 커밋"
+        out["commit_outputs"] = await workflow.execute_activity("commit_outputs", **_IO_OPTS)
+
         self._stage = "완료"
         return out
