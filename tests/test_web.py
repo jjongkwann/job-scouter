@@ -64,6 +64,9 @@ def test_candidates_serves_raw_html(client):
     r = client.get("/candidates")
     assert r.status_code == 200
     assert "후보목록 본문" in r.text
+    # 원본 HTML에도 사이트 내비가 끼워져야 다른 탭으로 돌아갈 수 있다
+    assert 'class="nav"' in r.text
+    assert 'aria-pressed="true">후보목록' in r.text
 
 
 def test_reports_render_markdown(client):

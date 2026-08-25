@@ -34,6 +34,24 @@ def _safe_url(u) -> str:
 
 _jenv.filters["safe_url"] = _safe_url
 
+# 내비는 후보목록.html(원본 그대로 내보내는 페이지)에도 끼워 넣어야 하므로 CSS·마크업을 따로 둔다
+NAV_CSS = """
+.nav{display:flex;align-items:center;gap:6px;padding:0 0 12px;margin:0 0 22px;border-bottom:1px solid var(--line)}
+.brand{font-size:13px;font-weight:700;letter-spacing:-.2px;margin-right:10px}
+.pill{font:inherit;font-size:12px;padding:4px 11px;border-radius:999px;cursor:pointer;line-height:1.5;
+  border:1px solid var(--line);background:var(--row);color:var(--fg);text-decoration:none;display:inline-block}
+.pill:hover{border-color:var(--dim);color:var(--fg)}
+.pill[aria-pressed="true"]{background:var(--fg);color:#fff;border-color:var(--fg)}
+.nav .meta{margin-left:auto;font-size:11px;color:var(--dim)}
+"""
+
+NAV = [("/", "대시보드"), ("/candidates", "후보목록"), ("/reports", "보고서"),
+       ("/resume", "이력서"), ("/applications", "지원서류"), ("/docs", "문서")]
+
+_NAV = _jenv.from_string("""<div class="nav"><span class="brand">job-scouter</span>
+{% for href, name in nav %}<a class="pill" href="{{ href }}" aria-pressed="{{ 'true' if name == active else 'false' }}">{{ name }}</a>
+{% endfor %}<span class="meta">LAN 전용 · 인증 없음</span></div>""")
+
 CSS = """
 <style>
 :root{--bg:#fcfcfb;--fg:#1a1a18;--dim:#71716b;--faint:#a3a39c;--line:#e6e6e1;--row:#fff;--hov:#f7f7f4;
@@ -52,13 +70,7 @@ h2 .c{color:var(--dim);font-weight:400;font-size:12px;margin-left:6px}
 .sub{color:var(--dim);font-size:13px;margin:0 0 18px;max-width:78ch}
 .sub b{color:var(--fg)}
 code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px}
-.nav{display:flex;align-items:center;gap:6px;padding:0 0 12px;margin:0 0 22px;border-bottom:1px solid var(--line)}
-.brand{font-size:13px;font-weight:700;letter-spacing:-.2px;margin-right:10px}
-.pill{font:inherit;font-size:12px;padding:4px 11px;border-radius:999px;cursor:pointer;line-height:1.5;
-  border:1px solid var(--line);background:var(--row);color:var(--fg);text-decoration:none;display:inline-block}
-.pill:hover{border-color:var(--dim);color:var(--fg)}
-.pill[aria-pressed="true"]{background:var(--fg);color:#fff;border-color:var(--fg)}
-.nav .meta{margin-left:auto;font-size:11px;color:var(--dim)}
+""" + NAV_CSS + """
 .stats{display:flex;flex-wrap:wrap;gap:20px;padding:13px 16px;border:1px solid var(--line);border-radius:9px;background:var(--row);margin-bottom:16px}
 .stat .n{font-size:19px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.2}
 .stat .l{font-size:11px;color:var(--dim)}
@@ -155,15 +167,10 @@ footer p{margin:0 0 7px}
 </style>
 """
 
-NAV = [("/", "대시보드"), ("/candidates", "후보목록"), ("/reports", "보고서"),
-       ("/resume", "이력서"), ("/applications", "지원서류"), ("/docs", "문서")]
-
 _BASE = _jenv.from_string("""<!doctype html><html lang="ko"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ title }} — job-scouter</title>""" + CSS + """</head><body><div class="wrap">
-<div class="nav"><span class="brand">job-scouter</span>
-{% for href, name in nav %}<a class="pill" href="{{ href }}" aria-pressed="{{ 'true' if name == active else 'false' }}">{{ name }}</a>
-{% endfor %}<span class="meta">LAN 전용 · 인증 없음</span></div>
+{{ nav_html|safe }}
 <h1>{{ title }}</h1>
 {% if sub %}<p class="sub">{{ sub|safe }}</p>{% endif %}
 {{ body|safe }}
@@ -275,8 +282,12 @@ _RESUME = _jenv.from_string("""
 </div></div>""")
 
 
+def _nav(active: str) -> str:
+    return _NAV.render(nav=NAV, active=active)
+
+
 def _render(title: str, body: str, active: str = "", sub: str = "", source: str = "") -> HTMLResponse:
-    return HTMLResponse(_BASE.render(title=title, body=body, nav=NAV, active=active,
+    return HTMLResponse(_BASE.render(title=title, body=body, nav_html=_nav(active),
                                      sub=sub, source=source))
 
 
@@ -396,10 +407,19 @@ async def publish(request: Request):
 
 @app.get("/candidates", response_class=HTMLResponse)
 def candidates():
+    """build.py 산출물을 그대로 내보내되 사이트 내비만 끼워 넣는다 — 원본 템플릿은
+    build.py --open으로 단독으로도 열리므로 손대지 않는다."""
     path = JOBFEED / "후보목록.html"
     if not path.exists():
         return _render("후보목록", '<div class="empty">아직 없음 — Publish 실행 후 생성됨</div>', active="후보목록")
-    return HTMLResponse(path.read_text())
+    html = path.read_text()
+    html = html.replace("</head>", f"<style>{NAV_CSS}</style></head>", 1)
+    nav = _nav("후보목록")
+    if '<div class="wrap">' in html:
+        html = html.replace('<div class="wrap">', '<div class="wrap">' + nav, 1)
+    else:
+        html = html.replace("<body>", "<body>" + nav, 1)
+    return HTMLResponse(html)
 
 
 @app.get("/reports", response_class=HTMLResponse)
