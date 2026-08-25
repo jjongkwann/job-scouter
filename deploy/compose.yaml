@@ -1,0 +1,11 @@
+# Temporal 서버 — 단일 컨테이너(CLI 이미지의 start-dev, SQLite 볼륨 영속). 1인 운영엔 충분.
+services:
+  temporal:
+    image: temporalio/temporal:latest
+    command: server start-dev --ip 0.0.0.0 --db-filename /data/temporal.db --log-level warn
+    ports:
+      - "7233:7233"   # gRPC — 워커
+      - "8233:8233"   # UI
+    volumes:
+      - ${HOME}/.temporal:/data   # SQLite 영속 — 컨테이너 재생성에도 이력 유지
+    restart: always

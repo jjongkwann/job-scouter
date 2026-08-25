@@ -1,0 +1,65 @@
+"""공유 상수·타입. 머신별 값(서버 주소·데이터 경로)은 .env로 — .env.example 참조."""
+import os
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+
+_env = os.environ.get
+ROOT = Path(__file__).parent.parent
+TEMPORAL = _env("JOBSCOUTER_TEMPORAL", "localhost:7233")
+ES_URL = _env("JOBSCOUTER_ES", "http://localhost:9200")
+# jobfeed = fetch_jobs.py·refresh_due.py·build.py·candidates.json·jobs.jsonl·기업평판.md가 있는 곳
+JOBFEED = Path(_env("JOBSCOUTER_JOBFEED", str(ROOT / "jobfeed")))
+# 사실베이스 = 판정 근거가 되는 본인 확인 완료 경력 사실 (개인 문서 — 저장소 밖)
+FACTBASE = Path(_env("JOBSCOUTER_FACTBASE", str(JOBFEED.parent / "이력서_사실베이스.md")))
+# 루브릭 프롬프트 = 개인 채점 기준 (저장소 밖). prompts/rubric_v1.example.md가 템플릿
+PROMPTS = Path(_env("JOBSCOUTER_PROMPTS", str(ROOT / "prompts")))
+DATA = ROOT / "data"
+# jobfeed 스크립트 인터프리터 — certifi가 있는 파이썬이어야 원티드 API가 붙는다
+PY = _env("JOBSCOUTER_PY", sys.executable)
+Q_WF, Q_IO, Q_LLM = "jobscout-wf", "jobscout-io", "jobscout-llm"
+WORKFLOW_ID = "job-scout-cycle"
+JUDGE_MODEL = _env("JOBSCOUTER_MODEL", "claude-sonnet-5")
+
+
+@dataclass
+class CycleParams:
+    browser_wait_minutes: int = 120
+    budget_tokens: int = 2_000_000   # 초과 시 잔여는 미점수 강등
+    chunk: int = 8                   # 동시 judge 수 — 청크 사이에서 예산 체크
+    max_tokens: int = 2000           # judge 1회 출력 상한
+    approve_wait_hours: int = 48
+    dry_run: bool = False            # commit_rows까지 dry-run — 리허설용
+
+
+@dataclass
+class Target:
+    id: str        # 원티드 "365172" | 점핏 "j54800311" — candidates.json 관례
+    company: str
+    title: str
+    src: str       # "wanted" | "jumpit"
+    url: str
+
+
+@dataclass
+class JudgeInput:
+    target: Target
+    requirements: str
+    search_context: str = ""   # Phase 3: 판례·평판·사실 발췌
+    max_tokens: int = 2000     # 폭주 방지 — 타입으로 강제
+
+
+@dataclass
+class Judgment:
+    id: str
+    company: str
+    title: str
+    scores: list[int]          # [스택,도메인,레벨,역할,감점(-25~0)]
+    total: int
+    exclude: bool
+    reason: str
+    quotes: list[str] = field(default_factory=list)
+    confidence: float = 0.0
+    rubric_version: str = ""
+    usage: dict = field(default_factory=dict)   # {in,out,cache_read,model,ms}
+    cached: bool = False

@@ -1,0 +1,7 @@
+.env
+data/
+jobfeed/
+prompts/rubric_v?.md
+__pycache__/
+.venv/
+*.egg-info/
