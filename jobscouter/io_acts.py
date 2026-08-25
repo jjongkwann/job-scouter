@@ -34,6 +34,27 @@ def _get(url: str) -> dict:
         return json.load(r)
 
 
+def _has_remote(repo: str) -> bool:
+    r = subprocess.run(["git", "-C", repo, "remote"], capture_output=True, text=True)
+    return bool(r.stdout.strip())
+
+
+@activity.defn
+def sync_repo() -> str:
+    """사이클 시작 시 jobfeed repo를 원격과 동기화(미니 워커 ↔ 맥북).
+    원격 없으면(맥북 단독 개발) 예외 없이 생략."""
+    repo = str(JOBFEED.parent)
+    if not _has_remote(repo):
+        return "원격 없음 — 동기화 생략"
+    r = subprocess.run(["git", "-C", repo, "pull", "--ff-only"],
+                       capture_output=True, text=True, timeout=120)
+    out = (r.stdout + r.stderr).strip()
+    if r.returncode != 0:
+        tail = "\n".join(out.splitlines()[-6:])
+        raise RuntimeError(f"git pull exit {r.returncode}\n{tail}")
+    return out.splitlines()[-1] if out else "완료"
+
+
 @activity.defn
 def run_script(name: str) -> str:
     """jobfeed 스크립트 하나를 돌리고 출력 꼬리를 돌려준다."""
@@ -120,4 +141,10 @@ def commit_rows(approved: list[dict], dry_run: bool = False) -> str:
     r = subprocess.run(["git", "-C", repo, "commit", "-m",
                         f"job-scouter: 자동 등재 {len(rows)}건 (rubric {vers.pop()})"],
                        capture_output=True, text=True)
-    return f"등재 {len(rows)}건 · git: {'커밋됨' if r.returncode == 0 else r.stdout + r.stderr}"
+    msg = f"등재 {len(rows)}건 · git: {'커밋됨' if r.returncode == 0 else r.stdout + r.stderr}"
+    if r.returncode == 0 and _has_remote(repo):
+        p = subprocess.run(["git", "-C", repo, "push"], capture_output=True, text=True)
+        if p.returncode != 0:
+            raise RuntimeError(f"git push 실패\n{p.stdout + p.stderr}")
+        msg += " · push됨"
+    return msg

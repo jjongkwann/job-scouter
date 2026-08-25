@@ -37,7 +37,7 @@ async def main() -> None:
         from jobscouter.workflow import JobScoutCycle
         acts = [io_acts.run_script, io_acts.load_targets,
                 io_acts.fetch_requirements, io_acts.commit_rows,
-                search.search_context]
+                io_acts.sync_repo, search.search_context]
         ex = ThreadPoolExecutor(4)
         workers = [
             Worker(client, task_queue=Q_WF, workflows=[JobScoutCycle]),

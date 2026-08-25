@@ -54,6 +54,9 @@ class JobScoutCycle:
     async def run(self, params: CycleParams) -> dict:
         out: dict = {}
 
+        self._stage = "동기화"
+        out["sync"] = await workflow.execute_activity("sync_repo", **_IO_OPTS)
+
         self._stage = "fetch"
         out["fetch"] = await workflow.execute_activity(
             "run_script", "fetch_jobs.py", **_IO_OPTS)

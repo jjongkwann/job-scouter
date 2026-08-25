@@ -1,4 +1,5 @@
 import json
+import subprocess
 
 import pytest
 
@@ -59,3 +60,27 @@ def test_commit_rows_rejects_mixed_rubric():
     js = [{"id": "1", "rubric_version": "v1"}, {"id": "2", "rubric_version": "v2"}]
     with pytest.raises(RuntimeError, match="혼재"):
         io_acts.commit_rows(js, dry_run=True)
+
+
+def test_sync_repo_no_remote(tmp_path, monkeypatch):
+    """실제 tmp git repo — 원격 없음(맥북 단독 개발 호환) → 예외 없이 생략 메시지."""
+    subprocess.run(["git", "init", str(tmp_path)], check=True, capture_output=True)
+    monkeypatch.setattr(io_acts, "JOBFEED", tmp_path / "jobfeed")
+    assert io_acts.sync_repo() == "원격 없음 — 동기화 생략"
+
+
+def test_sync_repo_pulls_when_remote_exists(monkeypatch, tmp_path):
+    monkeypatch.setattr(io_acts, "JOBFEED", tmp_path / "jobfeed")
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        if cmd[3] == "remote":
+            return subprocess.CompletedProcess(cmd, 0, stdout="origin\n", stderr="")
+        if cmd[3] == "pull":
+            return subprocess.CompletedProcess(cmd, 0, stdout="Already up to date.\n", stderr="")
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr(io_acts.subprocess, "run", fake_run)
+    assert io_acts.sync_repo() == "Already up to date."
+    assert ["git", "-C", str(tmp_path), "pull", "--ff-only"] in calls

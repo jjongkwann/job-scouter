@@ -14,6 +14,11 @@ RAN: list[str] = []
 COMMITTED: list[str] = []
 
 
+@activity.defn(name="sync_repo")
+async def fake_sync_repo() -> str:
+    return "원격 없음 — 동기화 생략"
+
+
 @activity.defn(name="run_script")
 async def fake_run_script(name: str) -> str:
     RAN.append(name)
@@ -57,7 +62,7 @@ async def fake_report(stats: dict) -> str:
     return "jobfeed/reports/2026-08-24_자동사이클.md"
 
 
-_ACTS = [fake_run_script, fake_load_targets, fake_fetch_requirements,
+_ACTS = [fake_sync_repo, fake_run_script, fake_load_targets, fake_fetch_requirements,
          fake_search_context, fake_judge, fake_commit_rows, fake_report]
 
 
@@ -134,7 +139,7 @@ async def test_running_handle_finds_cycle():
     try:
         q = f"test-{uuid.uuid4()}"
         async with Worker(env.client, task_queue=q, workflows=[JobScoutCycle],
-                          activities=[fake_run_script, fake_load_targets,
+                          activities=[fake_sync_repo, fake_run_script, fake_load_targets,
                                       fake_fetch_requirements, fake_judge,
                                       fake_search_context, fake_commit_rows,
                                       fake_report],
