@@ -169,8 +169,10 @@ def _commit_and_push(paths: list[str], message: str) -> str:
     subprocess.run(["git", "-C", repo, "add", *paths], check=True)
     r = subprocess.run(["git", "-C", repo, "commit", "-m", message],
                        capture_output=True, text=True)
-    msg = "커밋됨" if r.returncode == 0 else (r.stdout + r.stderr).strip()
-    if r.returncode == 0 and _has_remote(repo):
+    if r.returncode != 0:
+        return "변경 없음"
+    msg = "커밋됨"
+    if _has_remote(repo):
         p = subprocess.run(["git", "-C", repo, "push"], capture_output=True, text=True)
         if p.returncode != 0:
             raise RuntimeError(f"git push 실패\n{p.stdout + p.stderr}")
@@ -196,8 +198,7 @@ def save_proposals(judged: list[dict]) -> int:
     path.write_text(json.dumps(props, ensure_ascii=False, indent=1))
 
     names = [n for n in ("jobs.jsonl", "new.md", PROPOSALS) if (JOBFEED / n).exists()]
-    _commit_and_push([f"jobfeed/{n}" for n in names],
-                     f"job-scouter: 스캔 — 신규 {len(judged)}건, proposals {len(props)}건")
+    _commit_and_push([f"jobfeed/{n}" for n in names], f"job-scouter: 스캔 — proposals {len(props)}건")
     return len(props)
 
 
@@ -234,5 +235,5 @@ def commit_outputs() -> str:
     """Publish 마지막 — refresh_due·build 산출물(candidates.json·reports/)을 커밋."""
     names = [n for n in ("candidates.json", "reports") if (JOBFEED / n).exists()]
     if not names:
-        return "커밋 대상 없음"
+        return "변경 없음"
     return _commit_and_push([f"jobfeed/{n}" for n in names], "job-scouter: publish 산출물")

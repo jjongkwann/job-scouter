@@ -204,7 +204,7 @@ async def test_publish_commits_approved_and_rejects():
         assert out["commit"] == "등재 1건"
         assert out["reject"] == 1
         assert out["report"]
-        assert out["commit_outputs"] == "커밋됨"
+        assert out["outputs"] == "커밋됨"
     finally:
         await env.shutdown()
 

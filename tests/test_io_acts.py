@@ -125,6 +125,13 @@ def test_reject_proposals_records_skipped(tmp_path, monkeypatch):
     assert "777" not in props
 
 
+def test_commit_outputs_no_change(tmp_path, monkeypatch):
+    """candidates.json·reports/ 둘 다 없으면(혹은 변경 없으면) '변경 없음'."""
+    monkeypatch.setattr(io_acts, "JOBFEED", tmp_path / "jobfeed")
+    (tmp_path / "jobfeed").mkdir()
+    assert io_acts.commit_outputs() == "변경 없음"
+
+
 def test_sync_repo_commits_dirty_output_before_pull(tmp_path, monkeypatch):
     """fetch 산출물(jobs.jsonl 등)이 커밋 안 된 채 남아 있으면 stash 대신 그대로
     커밋한 뒤 pull한다 — 다음 사이클 pull이 dirty 충돌로 안 죽게."""
