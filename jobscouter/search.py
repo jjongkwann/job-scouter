@@ -12,6 +12,7 @@ _lock = threading.Lock()
 INDICES = ("jobscout_facts", "jobscout_precedents", "jobscout_reputation")
 MAPPING = {"properties": {
     "content": {"type": "text"},
+    "id": {"type": "keyword"},        # 판례의 공고 id — 자기 판례 제외용
     "company": {"type": "keyword"},
     "kind": {"type": "keyword"},   # fact | listed | skipped | reputation
     "embedding": {"type": "dense_vector", "dims": 1024,
@@ -58,9 +59,8 @@ def search_context_text(t: Target, requirements: str) -> str:
     q = f"{t.company} {t.title} {requirements[:200]}"
     parts = []
     prec = hybrid("jobscout_precedents", q, k=9)
-    # 같은 공고 자신의 판례는 뺀다 — 재판정 시 옛 점수를 베끼지 않게 (eval 공정성도 같은 이유)
-    prec = [d for d in prec
-            if not (t.company in d["content"] and t.title[:12] in d["content"])][:8]
+    # 같은 공고 자신의 판례만 뺀다(id 기준) — 형제 공고 판례는 중복 판정 근거라 남긴다
+    prec = [d for d in prec if d.get("id") != t.id][:8]
     if prec:
         parts.append("[판정 판례]\n" + "\n".join(d["content"][:200] for d in prec))
     rep = hybrid("jobscout_reputation", t.company, k=3, company=None)

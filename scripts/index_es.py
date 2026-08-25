@@ -35,16 +35,16 @@ def precedent_docs():
     for r in cand["rows"]:
         scores = r[3] + [0] * (5 - len(r[3]))
         rep = f" 평판: {r[4][4]}" if r[4] else (f" 평판없음: {r[5]}" if r[5] else "")
-        yield {"company": r[1], "kind": "listed",
+        yield {"id": str(r[2]), "company": r[1], "kind": "listed",
                "content": f"[등재 {sum(scores)}점 {scores}] {r[1]} | {r[0]}{rep}"}
-    for v in cand["skipped"].values():
+    for cid, v in cand["skipped"].items():
         # 레거시 스킵 항목은 [company, title, why] 대신 결합 문자열 하나뿐 (실측)
         if isinstance(v, list):
             company, title, why = v
             content = f"[제외] {company} | {title} | 사유: {why}"
         else:
             company, content = "", f"[제외] {v}"
-        yield {"company": company, "kind": "skipped", "content": content}
+        yield {"id": str(cid), "company": company, "kind": "skipped", "content": content}
 
 
 def reputation_docs():
