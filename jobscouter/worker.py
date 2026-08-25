@@ -1,6 +1,7 @@
 """실행 진입점.
 
     uv run python -m jobscouter.worker io            # workflow+io 워커 (자격증명 없음)
+    uv run python -m jobscouter.worker llm           # judge·report (claude -p, 구독 인증)
     uv run python -m jobscouter.worker run           # 사이클 시작
     uv run python -m jobscouter.worker browser-done "메모"
     uv run python -m jobscouter.worker status
@@ -77,10 +78,10 @@ async def main() -> None:
         print(await h.query("status"))
 
     elif cmd == "llm":
-        import os
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            sys.exit(".env에 ANTHROPIC_API_KEY가 없다")
+        import shutil
         from jobscouter import judge as judge_mod
+        if not shutil.which(judge_mod.CLAUDE):
+            sys.exit(f"'{judge_mod.CLAUDE}' 없음 — Claude Code 설치·로그인(또는 CLAUDE_CODE_OAUTH_TOKEN) 필요")
         from jobscouter.config import Q_LLM
         worker = Worker(
             client, task_queue=Q_LLM,

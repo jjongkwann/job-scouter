@@ -79,7 +79,7 @@ class JobScoutCycle:
                 return await workflow.execute_activity(
                     "judge",
                     {"target": t, "requirements": req,
-                     "search_context": ctx, "max_tokens": params.max_tokens},
+                     "search_context": ctx, "max_usd": params.max_usd},
                     **_LLM_OPTS)
 
             results = await asyncio.gather(

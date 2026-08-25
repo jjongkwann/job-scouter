@@ -27,7 +27,7 @@ class CycleParams:
     browser_wait_minutes: int = 120
     budget_tokens: int = 2_000_000   # 초과 시 잔여는 미점수 강등
     chunk: int = 8                   # 동시 judge 수 — 청크 사이에서 예산 체크
-    max_tokens: int = 2000           # judge 1회 출력 상한
+    max_usd: float = 0.5             # judge 1회 지출 상한 (--max-budget-usd) — 루브릭+사실베이스 ~25k 토큰이라 첫 호출 ~$0.1
     approve_wait_hours: int = 48
     dry_run: bool = False            # commit_rows까지 dry-run — 리허설용
 
@@ -46,7 +46,7 @@ class JudgeInput:
     target: Target
     requirements: str
     search_context: str = ""   # Phase 3: 판례·평판·사실 발췌
-    max_tokens: int = 2000     # 폭주 방지 — 타입으로 강제
+    max_usd: float = 0.5       # 폭주 방지 — 타입으로 강제
 
 
 @dataclass

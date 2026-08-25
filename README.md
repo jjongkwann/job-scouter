@@ -15,8 +15,11 @@ JobScoutCycle (workflow)
  └─ report           [llm 큐]  사이클 요약·비용
 ```
 
-큐 3개는 자격증명 격리 경계다 — LLM 자격증명은 llm 워커 프로세스에만 있고,
-io·workflow 모듈은 anthropic을 import하지 않는다(테스트로 강제).
+큐 3개는 자격증명 격리 경계다. judge·report는 Claude Code headless(`claude -p`,
+구독 인증 — 로그인된 CLI 또는 `CLAUDE_CODE_OAUTH_TOKEN`)로 돌고, 이 실행 경계는
+llm 워커의 `judge.py`에만 있다 — io·workflow 모듈은 judge를 import하지 않는다
+(테스트로 강제). API 키 불필요. 호출당 지출 상한은 `CycleParams.max_usd`
+(`--max-budget-usd`).
 
 ## 설정
 
@@ -34,7 +37,7 @@ io·workflow 모듈은 anthropic을 import하지 않는다(테스트로 강제).
 
 ```bash
 uv run python -m jobscouter.worker io    # 터미널 1 — workflow+io (자격증명 없음)
-uv run python -m jobscouter.worker llm   # 터미널 2 — judge·report
+uv run python -m jobscouter.worker llm   # 터미널 2 — judge·report (claude -p)
 uv run python -m jobscouter.worker run [--budget 2000000] [--dry-run]
 
 uv run python -m jobscouter.worker status               # 단계·proposals·비용
