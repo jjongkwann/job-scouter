@@ -46,6 +46,8 @@ uv run python -m jobscouter.worker scan [--budget 2000000]   # DailyScan 시작(
 uv run python -m jobscouter.worker publish id1 id2 ...       # Publish 시작 — 등재 승인
 uv run python -m jobscouter.worker reject <id> "<사유>"      # Publish 시작 — 거부만
 uv run python -m jobscouter.worker status                    # 실행 중 DailyScan/Publish 조회
+uv run python -m jobscouter.worker resume-sync             # 주 1회 이력서 갱신 제안(수동 시작)
+uv run python -m jobscouter.worker apply-resume <id> ...    # 제안 반영
 uv run python -m jobscouter.worker schedule                  # 일 1회 자동 시작 등록(매일 09:07 KST)
 ```
 
@@ -60,6 +62,7 @@ uv run uvicorn jobscouter.web:app --host 0.0.0.0 --port 8090   # 터미널 3 —
 | `/` | `proposals.json` 대시보드(점수·사유·인용) + 승인/거부 체크 → `Publish` 시작. 평판 미조사 회사·최근 실행 상태 |
 | `/candidates` | `build.py` 산출 `후보목록.html` 그대로 |
 | `/reports`, `/reports/{name}` | 사이클 보고서 목록·렌더 |
+| `/resume/proposals` | 이력서 갱신 제안 승인 → ApplyResume |
 | `/resume` | `JK.md`·사실베이스·`drafts/` 렌더 |
 | `/applications`, `/applications/{slug}` | 회사별 지원서류 5종 렌더 |
 | `/docs`, `/docs/{path}` | `references/` 문서 렌더(하위 디렉토리 포함) |
