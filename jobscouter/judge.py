@@ -25,6 +25,8 @@ _LEAN = ["--output-format", "json", "--tools", "", "--no-session-persistence",
          "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
          "--setting-sources", ""]
 
+# 긴 자유 텍스트(reason)는 맨 끝 — 모델이 긴 문자열 뒤에 XML 파라미터 문법을 섞어 넣으면
+# 뒤따르는 필드가 reason 안으로 삼켜져 스키마 검증이 계속 실패한다(2026-08-25 실측, 5/15건).
 SCORE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -33,12 +35,12 @@ SCORE_SCHEMA = {
                    "description": "[스택0-35, 도메인0-25, 레벨0-20, 역할0-20, 감점-25~0]"},
         "exclude": {"type": "boolean",
                     "description": "핵심 업무 통째 미보유·직무 불일치 등 등재 불가"},
-        "reason": {"type": "string", "description": "판정 사유 3문장 이내"},
-        "quotes": {"type": "array", "items": {"type": "string"},
-                   "description": "근거가 된 자격요건 원문 인용"},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "quotes": {"type": "array", "items": {"type": "string"},
+                   "description": "근거가 된 자격요건 원문 인용 (짧게, 3개 이내)"},
+        "reason": {"type": "string", "description": "판정 사유 3문장 이내"},
     },
-    "required": ["scores", "exclude", "reason", "quotes", "confidence"],
+    "required": ["scores", "exclude", "confidence", "quotes", "reason"],
 }
 
 
@@ -110,7 +112,7 @@ def judge(inp: JudgeInput) -> Judgment:
     j = Judgment(
         id=inp.target.id, company=inp.target.company, title=inp.target.title,
         scores=scores, total=sum(scores), exclude=bool(out["exclude"]),
-        reason=out["reason"], quotes=list(out["quotes"]),
+        reason=out["reason"].split("</")[0].strip(), quotes=list(out["quotes"]),
         confidence=float(out["confidence"]), rubric_version=RUBRIC_VERSION,
         usage={"in": u.get("input_tokens", 0) + u.get("cache_creation_input_tokens", 0),
                "out": u.get("output_tokens", 0),
