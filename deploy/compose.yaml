@@ -15,9 +15,10 @@ services:
 
   io:
     build: ..
-    command: ["uv", "run", "python", "-m", "jobscouter.worker", "io"]
+    command: ["/app/.venv/bin/python", "-m", "jobscouter.worker", "io"]
     env_file: .env
     environment:
+      PYTHONUNBUFFERED: "1"   # 컨테이너 로그에 print가 바로 보이게
       JOBSCOUTER_TEMPORAL: temporal:7233
       JOBSCOUTER_ES: http://host.docker.internal:9200
       JOBSCOUTER_JOBFEED: /work/repo/jobfeed
@@ -39,9 +40,10 @@ services:
 
   llm:
     build: ..
-    command: ["uv", "run", "python", "-m", "jobscouter.worker", "llm"]
+    command: ["/app/.venv/bin/python", "-m", "jobscouter.worker", "llm"]
     env_file: .env
     environment:
+      PYTHONUNBUFFERED: "1"   # 컨테이너 로그에 print가 바로 보이게
       JOBSCOUTER_TEMPORAL: temporal:7233
       JOBSCOUTER_ES: http://host.docker.internal:9200
       JOBSCOUTER_JOBFEED: /work/repo/jobfeed
@@ -51,6 +53,7 @@ services:
     volumes:
       - ${DATA_REPO}:/work/repo
       - jobscouter-data:/app/data
+      - ${HOME}/.claude/.credentials.json:/root/.claude/.credentials.json   # 호스트 Claude Code 로그인 공유 (없으면 CLAUDE_CODE_OAUTH_TOKEN)
     extra_hosts:
       - host.docker.internal:host-gateway
     restart: always
