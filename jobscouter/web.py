@@ -5,6 +5,7 @@ workflow 시작(파일 직접 수정 금지). Temporal 접근은 start_publish/r
 화면 규격은 후보목록(jobfeed/template.html)과 한 벌 — 색 토큰·14px 시스템 고딕·
 1220px 폭·9px 카드·999px 필·4px 왼쪽 레일(=평판 판정)을 그대로 쓴다."""
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -12,8 +13,9 @@ from zoneinfo import ZoneInfo
 
 import markdown as mdlib
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from jinja2 import Environment
+from markupsafe import escape
 from temporalio.client import Client
 
 from jobscouter.config import (APPLICATIONS, DRAFTS, FACTBASE, JK_MD,
@@ -25,6 +27,29 @@ from jobscouter.workflow import ApplyResume, Publish
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 _jenv = Environment(autoescape=True)
 KST = ZoneInfo("Asia/Seoul")
+
+# 무인증 LAN 앱의 브라우저 경유 공격 차단 — 이 레포 데이터에는 이력서·연락처가 있다.
+# Host 허용: IPv4 리터럴 · localhost · 점 없는 LAN 이름 · *.local (DNS 리바인딩은 공개 도메인이 Host로 온다)
+_HOST_OK = re.compile(r"(\d{1,3}(\.\d{1,3}){3}|localhost|[\w-]+|[\w-]+\.local)")
+# 문서 본문은 사람·LLM이 쓴 마크다운을 raw HTML 허용으로 렌더링한다 — 스크립트는 CSP로 막는다
+CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data: https:; form-action 'self'; base-uri 'none'"
+CSP_CANDIDATES = CSP.replace("default-src 'none';", "default-src 'none'; script-src 'unsafe-inline';")  # build.py 산출물은 인라인 스크립트로 렌더링
+
+
+@app.middleware("http")
+async def _lan_guard(request: Request, call_next):
+    host = request.headers.get("host", "").rsplit(":", 1)[0]
+    if not _HOST_OK.fullmatch(host):
+        return PlainTextResponse("허용되지 않은 Host", status_code=403)
+    # 다른 사이트의 <form>이 승인·반영을 대신 제출하는 것(CSRF) 차단 — 브라우저가 붙이는 Sec-Fetch-Site 기준
+    if request.method == "POST" and request.headers.get("sec-fetch-site", "same-origin") not in ("same-origin", "none"):
+        return PlainTextResponse("cross-site 요청 거부", status_code=403)
+    resp = await call_next(request)
+    resp.headers.setdefault("Content-Security-Policy", CSP)
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Referrer-Policy", "no-referrer")
+    return resp
 
 
 def _safe_url(u) -> str:
@@ -419,7 +444,7 @@ def candidates():
         html = html.replace('<div class="wrap">', '<div class="wrap">' + nav, 1)
     else:
         html = html.replace("<body>", "<body>" + nav, 1)
-    return HTMLResponse(html)
+    return HTMLResponse(html, headers={"Content-Security-Policy": CSP_CANDIDATES})
 
 
 @app.get("/reports", response_class=HTMLResponse)
@@ -512,7 +537,7 @@ def application(slug: str):
         raise HTTPException(404, "지원서류 없음")
     sections = [(p.name, _render_md(p.read_text())) for p in sorted(d.glob("*.md"))]
     return _render(slug, _DOCS.render(sections=sections), active="지원서류",
-                   sub=f"<code>applications/{slug}</code> · md {len(sections)}")
+                   sub=f"<code>applications/{escape(slug)}</code> · md {len(sections)}")
 
 
 @app.get("/docs", response_class=HTMLResponse)

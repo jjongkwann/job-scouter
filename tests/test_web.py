@@ -136,6 +136,31 @@ def test_resume_apply_starts_workflow(client, monkeypatch):
     assert calls == [["abc12345"]]
 
 
+def test_security_headers_and_csp(client):
+    r = client.get("/")
+    assert "script-src" not in r.headers["content-security-policy"]   # 기본은 스크립트 전면 차단
+    assert r.headers["x-frame-options"] == "DENY"
+    # build.py 산출물만 인라인 스크립트 허용
+    assert "script-src 'unsafe-inline'" in client.get("/candidates").headers["content-security-policy"]
+
+
+def test_dns_rebinding_host_rejected(client):
+    assert client.get("/", headers={"host": "attacker.example.com"}).status_code == 403
+    assert client.get("/", headers={"host": "10.1.2.3:8090"}).status_code == 200
+    assert client.get("/", headers={"host": "server.local"}).status_code == 200
+
+
+def test_cross_site_post_rejected(client, monkeypatch):
+    calls = []
+
+    async def fake(ids, rejects):
+        calls.append(1)
+        return "x"
+    monkeypatch.setattr(web, "start_publish", fake)
+    r = client.post("/publish", data={"approve": ["111"]}, headers={"sec-fetch-site": "cross-site"})
+    assert r.status_code == 403 and calls == []
+
+
 def test_safe_url_blocks_non_http():
     from jobscouter.web import _safe_url
     assert _safe_url("javascript:alert(1)") == "#"
