@@ -4,13 +4,17 @@ import re
 import ssl
 import subprocess
 import urllib.request
+from datetime import date
 
 from temporalio import activity
 
-from jobscouter.config import JOBFEED, PY, Target
+from jobscouter.config import JOBFEED, PROPOSALS, PY, Target
 
 
 SCRIPTS = {"fetch_jobs.py", "refresh_due.py", "build.py"}
+# proposals.json에 남기는 필드 — usage·exclude·cached는 판정 내부용이라 뺀다
+PROP_FIELDS = ["id", "company", "title", "url", "src", "scores", "total",
+               "reason", "quotes", "confidence", "rubric_version"]
 
 try:  # python.org 빌드 대비 — fetch_jobs.py와 동일 처리
     import certifi
@@ -148,3 +152,65 @@ def commit_rows(approved: list[dict], dry_run: bool = False) -> str:
             raise RuntimeError(f"git push 실패\n{p.stdout + p.stderr}")
         msg += " · push됨"
     return msg
+
+
+def _commit_and_push(paths: list[str], message: str) -> None:
+    repo = str(JOBFEED.parent)
+    subprocess.run(["git", "-C", repo, "add", *paths], check=True)
+    r = subprocess.run(["git", "-C", repo, "commit", "-m", message],
+                       capture_output=True, text=True)
+    if r.returncode == 0 and _has_remote(repo):
+        p = subprocess.run(["git", "-C", repo, "push"], capture_output=True, text=True)
+        if p.returncode != 0:
+            raise RuntimeError(f"git push 실패\n{p.stdout + p.stderr}")
+
+
+@activity.defn
+def save_proposals(judged: list[dict]) -> int:
+    """비제외 judged를 proposals.json에 id로 병합 + 이미 등재·거부된 id 정리.
+    변화 없으면(빈 judged, 새로 지울 것도 없음) 커밋 생략. 반환: 현재 proposals 건수."""
+    path = JOBFEED / PROPOSALS
+    before = json.loads(path.read_text()) if path.exists() else {}
+    props = dict(before)
+    for j in judged:
+        rec = {k: j[k] for k in PROP_FIELDS}
+        rec["judged_at"] = date.today().isoformat()
+        props[str(rec["id"])] = rec
+
+    cand = json.loads((JOBFEED / "candidates.json").read_text())
+    known = {str(r[2]) for r in cand["rows"]} | set(cand["skipped"])
+    props = {pid: rec for pid, rec in props.items() if pid not in known}
+
+    if props == before:
+        return len(props)
+    path.write_text(json.dumps(props, ensure_ascii=False, indent=1))
+    _commit_and_push([f"jobfeed/{PROPOSALS}"], f"job-scouter: proposals {len(props)}건")
+    return len(props)
+
+
+@activity.defn
+def load_proposals(ids: list[str]) -> list[dict]:
+    """proposals.json에서 해당 id들의 판정 dict(commit_rows 입력 형식)를 돌려준다."""
+    path = JOBFEED / PROPOSALS
+    props = json.loads(path.read_text()) if path.exists() else {}
+    return [props[str(i)] for i in ids if str(i) in props]
+
+
+@activity.defn
+def reject_proposals(rejects: list[dict]) -> int:
+    """candidates.json skipped[id] = [company, title, why] 기록 + proposals에서 제거."""
+    if not rejects:
+        return 0
+    path = JOBFEED / PROPOSALS
+    props = json.loads(path.read_text()) if path.exists() else {}
+    cand_path = JOBFEED / "candidates.json"
+    cand = json.loads(cand_path.read_text())
+    for r in rejects:
+        pid = str(r["id"])
+        rec = props.pop(pid, {})
+        cand["skipped"][pid] = [rec.get("company", ""), rec.get("title", ""), r["why"]]
+    cand_path.write_text(json.dumps(cand, ensure_ascii=False, indent=1))
+    path.write_text(json.dumps(props, ensure_ascii=False, indent=1))
+    _commit_and_push(["jobfeed/candidates.json", f"jobfeed/{PROPOSALS}"],
+                     f"job-scouter: 제외 {len(rejects)}건")
+    return len(rejects)

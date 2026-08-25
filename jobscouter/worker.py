@@ -1,13 +1,16 @@
 """실행 진입점.
 
-    uv run python -m jobscouter.worker io            # workflow+io 워커 (자격증명 없음)
-    uv run python -m jobscouter.worker llm           # judge·report (claude -p, 구독 인증)
-    uv run python -m jobscouter.worker run           # 사이클 시작
-    uv run python -m jobscouter.worker browser-done "메모"
-    uv run python -m jobscouter.worker status
+    uv run python -m jobscouter.worker io                  # workflow+io 워커 (자격증명 없음)
+    uv run python -m jobscouter.worker llm                  # judge·report (claude -p, 구독 인증)
+    uv run python -m jobscouter.worker scan [--budget N]     # DailyScan 시작
+    uv run python -m jobscouter.worker publish id1 id2 ...   # Publish 시작 (등재 승인)
+    uv run python -m jobscouter.worker reject <id> "<사유>"  # Publish 시작 (거부만)
+    uv run python -m jobscouter.worker status                # 실행 중 DailyScan/Publish 조회
+    uv run python -m jobscouter.worker schedule               # 일 1회 자동 시작 등록
 """
 import asyncio
 import sys
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 from dotenv import load_dotenv
@@ -17,13 +20,14 @@ load_dotenv()  # .env(서버 주소·데이터 경로·키) — config import �
 from temporalio.client import Client
 from temporalio.worker import Worker
 
-from jobscouter.config import TEMPORAL, WORKFLOW_ID, Q_IO, Q_WF, CycleParams
+from jobscouter.config import TEMPORAL, Q_IO, Q_WF, PublishParams, ScanParams
 
 
 async def _running_handle(client: Client):
-    """실행 중인 사이클 핸들. 스케줄 시작 워크플로는 id가 매번 달라 검색으로 찾는다."""
+    """실행 중인 DailyScan/Publish 핸들. 스케줄 시작 워크플로는 id가 매번 달라 검색으로 찾는다."""
     async for wf in client.list_workflows(
-            "WorkflowType='JobScoutCycle' AND ExecutionStatus='Running'"):
+            "(WorkflowType='DailyScan' OR WorkflowType='Publish') "
+            "AND ExecutionStatus='Running'"):
         return client.get_workflow_handle(wf.id)
     sys.exit("실행 중인 사이클이 없다")
 
@@ -34,44 +38,50 @@ async def main() -> None:
 
     if cmd == "io":
         from jobscouter import io_acts, search
-        from jobscouter.workflow import JobScoutCycle
+        from jobscouter.workflow import DailyScan, Publish
         acts = [io_acts.run_script, io_acts.load_targets,
                 io_acts.fetch_requirements, io_acts.commit_rows,
-                io_acts.sync_repo, search.search_context]
+                io_acts.sync_repo, io_acts.save_proposals,
+                io_acts.load_proposals, io_acts.reject_proposals,
+                search.search_context]
         ex = ThreadPoolExecutor(4)
         workers = [
-            Worker(client, task_queue=Q_WF, workflows=[JobScoutCycle]),
+            Worker(client, task_queue=Q_WF, workflows=[DailyScan, Publish]),
             Worker(client, task_queue=Q_IO, activities=acts, activity_executor=ex),
         ]
         print(f"io 워커 시작 — {TEMPORAL} / {Q_WF}, {Q_IO}")
         await asyncio.gather(*(w.run() for w in workers))
 
-    elif cmd == "run":
+    elif cmd == "scan":
         import argparse
         p = argparse.ArgumentParser()
         p.add_argument("--budget", type=int, default=2_000_000)
-        p.add_argument("--browser-wait", type=int, default=120)
-        p.add_argument("--dry-run", action="store_true")
         a = p.parse_args(sys.argv[2:])
-        from jobscouter.workflow import JobScoutCycle
+        from jobscouter.workflow import DailyScan
         handle = await client.start_workflow(
-            JobScoutCycle.run,
-            CycleParams(budget_tokens=a.budget, browser_wait_minutes=a.browser_wait,
-                       dry_run=a.dry_run),
-            id=WORKFLOW_ID, task_queue=Q_WF)
+            DailyScan.run, ScanParams(budget_tokens=a.budget),
+            id="daily-scan-manual", task_queue=Q_WF)
         print(f"시작: {handle.id} → http://{TEMPORAL.split(':')[0]}:8233")
 
-    elif cmd == "browser-done":
-        note = sys.argv[2] if len(sys.argv) > 2 else "완료"
-        h = await _running_handle(client)
-        await h.signal("browser_done", note)
-        print("signal 전송:", note)
+    elif cmd == "publish":
+        ids = sys.argv[2:]
+        if not ids:
+            sys.exit("사용: worker publish id1 id2 ...")
+        from jobscouter.workflow import Publish
+        handle = await client.start_workflow(
+            Publish.run, PublishParams(ids=ids),
+            id=f"publish-{uuid.uuid4()}", task_queue=Q_WF)
+        print(f"시작: {handle.id}")
 
-    elif cmd == "approve":
-        ids = [] if sys.argv[2:] == ["--none"] else sys.argv[2:]
-        h = await _running_handle(client)
-        await h.signal("approve", ids)
-        print(f"승인 signal: {ids or '등재 없음'}")
+    elif cmd == "reject":
+        if len(sys.argv) < 4:
+            sys.exit('사용: worker reject <id> "<사유>"')
+        rid, why = sys.argv[2], sys.argv[3]
+        from jobscouter.workflow import Publish
+        handle = await client.start_workflow(
+            Publish.run, PublishParams(rejects=[{"id": rid, "why": why}]),
+            id=f"publish-{uuid.uuid4()}", task_queue=Q_WF)
+        print(f"시작: {handle.id}")
 
     elif cmd == "status":
         h = await _running_handle(client)
@@ -92,21 +102,27 @@ async def main() -> None:
         await worker.run()
 
     elif cmd == "schedule":
+        from temporalio.service import RPCError
         from temporalio.client import (Schedule, ScheduleActionStartWorkflow,
                                        ScheduleOverlapPolicy, SchedulePolicy,
                                        ScheduleSpec)
-        from jobscouter.workflow import JobScoutCycle
+        from jobscouter.workflow import DailyScan
         await client.create_schedule(
-            "job-scout-weekly",
+            "daily-scan",
             Schedule(
                 action=ScheduleActionStartWorkflow(
-                    JobScoutCycle.run, CycleParams(),
-                    id=WORKFLOW_ID, task_queue=Q_WF),
-                spec=ScheduleSpec(cron_expressions=["7 9 * * 1"],
+                    DailyScan.run, ScanParams(),
+                    id="daily-scan", task_queue=Q_WF),
+                spec=ScheduleSpec(cron_expressions=["7 9 * * *"],
                                   time_zone_name="Asia/Seoul"),
                 policy=SchedulePolicy(overlap=ScheduleOverlapPolicy.SKIP),
             ))
-        print("스케줄 등록: 매주 월 09:07 KST — 진행 중 사이클 있으면 skip")
+        try:
+            await client.get_schedule_handle("job-scout-weekly").delete()
+            deleted = "삭제됨"
+        except RPCError:
+            deleted = "없었음"
+        print(f"스케줄 등록: 매일 09:07 KST daily-scan — job-scout-weekly {deleted}")
 
     else:
         sys.exit(f"모르는 명령: {cmd}")

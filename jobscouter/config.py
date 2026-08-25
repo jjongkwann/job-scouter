@@ -18,18 +18,21 @@ DATA = ROOT / "data"
 # jobfeed 스크립트 인터프리터 — certifi가 있는 파이썬이어야 원티드 API가 붙는다
 PY = _env("JOBSCOUTER_PY", sys.executable)
 Q_WF, Q_IO, Q_LLM = "jobscout-wf", "jobscout-io", "jobscout-llm"
-WORKFLOW_ID = "job-scout-cycle"
 JUDGE_MODEL = _env("JOBSCOUTER_MODEL", "claude-sonnet-5")
+PROPOSALS = "proposals.json"   # JOBFEED 아래 — 판정됐지만 등재/거부 전인 후보
 
 
 @dataclass
-class CycleParams:
-    browser_wait_minutes: int = 120
+class ScanParams:
     budget_tokens: int = 2_000_000   # 초과 시 잔여는 미점수 강등
     chunk: int = 8                   # 동시 judge 수 — 청크 사이에서 예산 체크
     max_usd: float = 0.5             # judge 1회 지출 상한 (--max-budget-usd) — 루브릭+사실베이스 ~25k 토큰이라 첫 호출 ~$0.1
-    approve_wait_hours: int = 48
-    dry_run: bool = False            # commit_rows까지 dry-run — 리허설용
+
+
+@dataclass
+class PublishParams:
+    ids: list[str] = field(default_factory=list)          # 등재 승인된 proposal id
+    rejects: list[dict] = field(default_factory=list)     # [{"id","why"}, ...]
 
 
 @dataclass

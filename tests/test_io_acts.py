@@ -69,6 +69,62 @@ def test_sync_repo_no_remote(tmp_path, monkeypatch):
     assert io_acts.sync_repo() == "원격 없음 — 동기화 생략"
 
 
+def _init_repo(tmp_path):
+    subprocess.run(["git", "init", str(tmp_path)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "t"], check=True)
+
+
+def test_save_proposals_merges_and_cleans(tmp_path, monkeypatch):
+    """이미 등재된 id는 병합 후 제거되고, 신규는 남아 commit_rows 입력 형식으로 저장된다."""
+    _init_repo(tmp_path)
+    jobfeed = tmp_path / "jobfeed"
+    jobfeed.mkdir()
+    monkeypatch.setattr(io_acts, "JOBFEED", jobfeed)
+    (jobfeed / "candidates.json").write_text(json.dumps({
+        "rows": [["포지션", "등재회사", 222, [30, 10, 16, 20, 0], None, "사유", [], None]],
+        "skipped": {"333": ["스킵회사", "포지션", "사유"]},
+    }, ensure_ascii=False))
+    judged = [
+        {"id": "222", "company": "등재회사", "title": "포지션", "url": "u1", "src": "wanted",
+         "scores": [30, 10, 16, 20, 0], "total": 76, "reason": "r", "quotes": [],
+         "confidence": 0.9, "rubric_version": "v1"},
+        {"id": "555", "company": "새회사", "title": "백엔드", "url": "u2", "src": "jumpit",
+         "scores": [30, 18, 20, 16, -5], "total": 79, "reason": "r2", "quotes": [],
+         "confidence": 0.8, "rubric_version": "v1"},
+    ]
+    n = io_acts.save_proposals(judged)
+    assert n == 1
+    saved = json.loads((jobfeed / "proposals.json").read_text())
+    assert "222" not in saved   # candidates rows에 이미 있음 → 제거
+    assert saved["555"]["company"] == "새회사"
+    assert saved["555"]["url"] == "u2"
+    assert saved["555"]["judged_at"]
+
+
+def test_reject_proposals_records_skipped(tmp_path, monkeypatch):
+    _init_repo(tmp_path)
+    jobfeed = tmp_path / "jobfeed"
+    jobfeed.mkdir()
+    monkeypatch.setattr(io_acts, "JOBFEED", jobfeed)
+    (jobfeed / "candidates.json").write_text(json.dumps(
+        {"rows": [], "skipped": {}}, ensure_ascii=False))
+    (jobfeed / "proposals.json").write_text(json.dumps({
+        "777": {"id": "777", "company": "제외회사", "title": "포지션", "url": "u",
+                "src": "wanted", "scores": [10, 5, 5, 5, 0], "total": 25,
+                "reason": "r", "quotes": [], "confidence": 0.5, "rubric_version": "v1",
+                "judged_at": "2026-08-24"},
+    }, ensure_ascii=False))
+
+    n = io_acts.reject_proposals([{"id": "777", "why": "연봉 미공개"}])
+    assert n == 1
+
+    cand = json.loads((jobfeed / "candidates.json").read_text())
+    assert cand["skipped"]["777"] == ["제외회사", "포지션", "연봉 미공개"]
+    props = json.loads((jobfeed / "proposals.json").read_text())
+    assert "777" not in props
+
+
 def test_sync_repo_pulls_when_remote_exists(monkeypatch, tmp_path):
     monkeypatch.setattr(io_acts, "JOBFEED", tmp_path / "jobfeed")
     calls = []
