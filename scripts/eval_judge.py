@@ -54,7 +54,11 @@ def main():
             continue
         if a.rag:
             ctx = search_context_text(t, req)
-        j = judge(JudgeInput(target=t, requirements=req, search_context=ctx))
+        try:
+            j = judge(JudgeInput(target=t, requirements=req, search_context=ctx))
+        except Exception as e:
+            lines.append(f"| {r[1]} | {r[3]} | 판정 실패: {str(e)[:60]} | | | |")
+            continue
         manual = r[3] + [0] * (5 - len(r[3]))
         match = sum(int(m == g) for m, g in zip(manual, j.scores))
         axis_hits += match
@@ -74,7 +78,11 @@ def main():
             continue
         if a.rag:
             ctx = search_context_text(t, req)
-        j = judge(JudgeInput(target=t, requirements=req, search_context=ctx))
+        try:
+            j = judge(JudgeInput(target=t, requirements=req, search_context=ctx))
+        except Exception as e:
+            lines.append(f"| {company} | {why[:40]} | 판정 실패 | {str(e)[:60]} |")
+            continue
         excl_ok += int(j.exclude or j.total < 70)
         lines.append(f"| {company} | {why[:40]} | {j.exclude} ({j.total}점) "
                      f"| {j.reason[:60]} |")
