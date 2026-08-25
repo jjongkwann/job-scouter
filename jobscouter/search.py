@@ -57,7 +57,10 @@ def search_context_text(t: Target, requirements: str) -> str:
     """판례·평판·사실 발췌를 judge 입력용 한 블록으로. 총 ~2500자 캡."""
     q = f"{t.company} {t.title} {requirements[:200]}"
     parts = []
-    prec = hybrid("jobscout_precedents", q, k=8)
+    prec = hybrid("jobscout_precedents", q, k=9)
+    # 같은 공고 자신의 판례는 뺀다 — 재판정 시 옛 점수를 베끼지 않게 (eval 공정성도 같은 이유)
+    prec = [d for d in prec
+            if not (t.company in d["content"] and t.title[:12] in d["content"])][:8]
     if prec:
         parts.append("[판정 판례]\n" + "\n".join(d["content"][:200] for d in prec))
     rep = hybrid("jobscout_reputation", t.company, k=3, company=None)
