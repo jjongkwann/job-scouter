@@ -48,7 +48,8 @@ docker compose -f deploy/compose.yaml up -d --build
 ## 4. 검증
 
 ```bash
-docker compose -f deploy/compose.yaml ps                 # 3개 다 Up
+docker compose -f deploy/compose.yaml ps                 # temporal·io·llm·web 4개 Up
+curl -s -o /dev/null -w '%{http_code}' http://localhost:8090/   # 200 — 웹 대시보드
 temporal operator cluster health --address localhost:7233   # SERVING (서버 로컬)
 docker compose -f deploy/compose.yaml logs io llm         # 워커 시작 로그 확인
 ```
@@ -65,15 +66,19 @@ activity 입출력(사실베이스 발췌 포함)이 남는다. ES는 호스트 
 docker compose -f deploy/compose.yaml exec io uv run python scripts/index_es.py
 ```
 
-## 6. 운영 명령 (작업 머신에서)
+## 6. 운영
 
-작업 머신의 `.env`에서 `JOBSCOUTER_TEMPORAL=<server-ip>:7233`으로 서버를 가리키면,
-로컬 워커 없이도 signal·조회가 된다:
+사람은 웹 대시보드 `http://<server-ip>:8090/`에서 본다 — 제안 승인/거부, 후보목록,
+보고서, 이력서·사실베이스, 지원서류, 이력서 갱신 제안. 스케줄(`daily-scan` 매일 09:07,
+`resume-sync` 매주 월 08:00 KST)은 작업 머신에서 한 번 등록한다:
 
 ```bash
-uv run python -m jobscouter.worker status
-uv run python -m jobscouter.worker browser-done "메모"
-uv run python -m jobscouter.worker approve <id> ...
+uv run python -m jobscouter.worker schedule
+uv run python -m jobscouter.worker status          # 실행 중 워크플로
+uv run python -m jobscouter.worker scan            # 수동 스캔
+uv run python -m jobscouter.worker resume-sync     # 수동 이력서 갱신 제안
 ```
 
-워커가 서버 컨테이너에서 상시 가동 중이므로, signal을 보내면 곧바로 이어진다.
+작업 머신 `.env`의 `JOBSCOUTER_TEMPORAL=<server-ip>:7233`으로 서버를 가리키면
+로컬 워커 없이 위 명령이 동작한다. 코드 갱신 시 서버에서
+`docker compose -f deploy/compose.yaml up -d --build io llm web`.

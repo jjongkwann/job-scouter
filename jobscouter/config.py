@@ -34,6 +34,9 @@ PKB_INDEX = "pkb_documents"   # 미니 ES — 개인 지식베이스. ResumeSync
 # 나머지는 기술 학습 노트라 이력서 갱신 근거로 부적절해 제외했다. 사용자가 PKB에서
 # 이 카테고리 문서를 canonical/active로 승격하면 다음 ResumeSync부터 반영된다.
 PKB_CATEGORIES = _env("JOBSCOUTER_PKB_CATEGORIES", "career,about,상용 서비스 개발 및 운영")
+# ResumeSync 결과는 사람 승인을 거치므로 PKB의 curated(canonical/active)보다 넓게 읽는다 —
+# 2026-08-25 실측: 경력 문서는 전부 evergreen/draft-rewrite/in-progress라 curated만으론 0건
+PKB_STATUSES = _env("JOBSCOUTER_PKB_STATUSES", "canonical,active,evergreen,draft-rewrite,in-progress")
 
 # 데이터 repo 레이아웃(JOBFEED.parent가 루트) — 웹앱 열람·지원서류 초안이 쓴다
 JK_MD = JOBFEED.parent / "JK.md"

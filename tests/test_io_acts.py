@@ -300,8 +300,9 @@ def test_pkb_snapshot_deterministic_hash_and_filter(monkeypatch):
     cats = [c.strip() for c in io_acts.PKB_CATEGORIES.split(",")]
     filt = kw["query"]["bool"]["filter"]
     assert {"terms": {"category": cats}} in filt
-    assert {"terms": {"doc_type": ["concept", "guide", "moc"]}} in filt
-    assert {"terms": {"status": ["canonical", "active"]}} in filt
+    assert not any("doc_type" in f.get("terms", {}) for f in filt)
+    from jobscouter.config import PKB_STATUSES
+    assert {"terms": {"status": PKB_STATUSES.split(",")}} in filt
 
 
 def test_pkb_snapshot_truncates_text_but_hashes_full_content(monkeypatch):

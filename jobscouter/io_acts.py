@@ -10,7 +10,7 @@ from datetime import date
 from temporalio import activity
 
 from jobscouter.config import (APP_FILES, APPLICATIONS, FACTBASE, JK_MD, JOBFEED,
-                                PKB_CATEGORIES, PKB_INDEX, PROPOSALS, PY,
+                                PKB_CATEGORIES, PKB_INDEX, PKB_STATUSES, PROPOSALS, PY,
                                 RESUME_PROPOSALS, Target, _norm)
 from jobscouter.search import es
 
@@ -23,9 +23,8 @@ RESUME_STATE = JOBFEED.parent / "data" / "resume_state.json"   # 데이터 repo 
 PKB_TEXT_CAP = 40_000   # propose_resume_update 입력용 캡
 _ADD_HEADING = "## 미분류 추가(자동 제안 승인)"
 # personal-docs/src/pkb/retrieve.py profile_filter("curated") 그대로 재현
-_PKB_PROFILE_FILTER = [
-    {"terms": {"doc_type": ["concept", "guide", "moc"]}},
-    {"terms": {"status": ["canonical", "active"]}},
+_PKB_PROFILE_FILTER = [   # doc_type 제한은 두지 않는다(경력 문서 doc_type이 제각각) — category+status로 범위 지정
+    {"terms": {"status": [x.strip() for x in PKB_STATUSES.split(",") if x.strip()]}},
 ]
 # 같은 파일 _lifecycle_filter(include_archived=False) 그대로 재현
 _PKB_LIFECYCLE_FILTER = [
