@@ -11,10 +11,21 @@ dependencies = [
     "python-dotenv>=1.2.3",
     "sentence-transformers>=6.0.0",
     "temporalio>=1.9",
+    "torch",   # 직접 의존성으로 명시해야 tool.uv.sources가 적용된다(간접 의존엔 안 먹음)
 ]
 
 [dependency-groups]
 dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+# 서버(Linux 컨테이너)는 CPU 전용 torch 휠을 받는다 — 기본 인덱스는 CUDA 휠까지 끌고 온다.
+# 맥(darwin)은 이 인덱스를 타지 않고 기존 PyPI 휠(MPS 지원) 그대로.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

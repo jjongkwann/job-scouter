@@ -50,6 +50,8 @@ uv run python -m jobscouter.worker schedule             # 주 1회 자동 시작
 판정 캐시는 `data/judgments.jsonl` — 루브릭을 올리면 `rubric_v2.md` 추가 후
 `judge.RUBRIC_VERSION` 변경, 전 건이 자동 재판정 대상이 된다.
 
+서버 컨테이너 운영(io·llm 워커 상시 가동): `deploy/SERVER_SETUP.md`.
+
 ## RAG (Phase 3)
 
 기존 ES에 `jobscout_facts`(사실베이스) · `jobscout_precedents`(판정 판례) ·

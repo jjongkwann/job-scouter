@@ -1,0 +1,6 @@
+data/
+.venv/
+.env
+.git/
+__pycache__/
+deploy/.env

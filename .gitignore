@@ -1,4 +1,5 @@
 .env
+deploy/.env
 data/
 jobfeed/
 prompts/rubric_v?.md
