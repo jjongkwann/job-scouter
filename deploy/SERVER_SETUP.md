@@ -22,19 +22,20 @@ echo "https://<github-user>:$(gh auth token)@github.com" > ~/.git-credentials
 chmod 600 ~/.git-credentials
 ```
 
-## 2. 토큰·환경변수 (작업 머신에서 발급 → 서버로)
+## 2. 인증·환경변수
 
-작업 머신에서 `claude setup-token`으로 구독 인증 토큰을 발급받는다. 서버의
-`deploy/server.env.example`을 `deploy/.env`로 복사해 채운다:
+llm 컨테이너의 `claude -p`는 **서버 호스트의 Claude Code 로그인**을 그대로 쓴다 —
+compose가 `~/.claude/.credentials.json`을 마운트한다(호스트에서 `claude`를 한 번
+로그인해 두면 끝). 호스트에 로그인이 없으면 작업 머신에서 `claude setup-token`으로
+토큰을 발급해 `deploy/.env`의 `CLAUDE_CODE_OAUTH_TOKEN`에 넣는다(마운트보다 우선).
 
 ```bash
 cp deploy/server.env.example deploy/.env
-# DATA_REPO=~/jobscouter-data 절대경로
-# CLAUDE_CODE_OAUTH_TOKEN=<claude setup-token 출력>
-# GIT_AUTHOR_NAME / GIT_AUTHOR_EMAIL
+# DATA_REPO=<데이터 repo clone 절대경로>
+# GIT_AUTHOR_NAME / GIT_AUTHOR_EMAIL  (자동 커밋 작성자)
 ```
 
-`deploy/.env`는 gitignore 대상 — 맥북 로컬 개발용 `.env`와 별개다.
+`deploy/.env`는 gitignore 대상 — 작업 머신 로컬 개발용 `.env`와 별개다.
 
 ## 3. 컨테이너 기동
 
