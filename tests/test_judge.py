@@ -57,3 +57,40 @@ def test_cache_roundtrip(tmp_path, monkeypatch):
     assert called[0][1] == "루브릭\n사실"          # {factbase} 치환
     assert j1.usage["in"] == 1000 and j1.usage["usd"] == 0.01
     assert j2.total == 84 and j2.rubric_version == "v1"
+
+
+def _setup_app_env(tmp_path, monkeypatch):
+    apps = tmp_path / "applications"
+    (apps / "example").mkdir(parents=True)
+    (apps / "README.md").write_text("지원서류 규칙")
+    for name in J.APP_FILES:
+        (apps / "example" / name).write_text(f"예시 {name}")
+    monkeypatch.setattr(J, "APPLICATIONS", apps)
+    monkeypatch.setattr(J, "APP_EXAMPLE", "example")
+    monkeypatch.setattr(J, "FACTBASE", tmp_path / "facts.md")
+    (tmp_path / "facts.md").write_text("사실")
+    monkeypatch.setattr(J, "JK_MD", tmp_path / "JK.md")
+    (tmp_path / "JK.md").write_text("JK 소개")
+
+
+def test_draft_application_splits_5_files(tmp_path, monkeypatch):
+    _setup_app_env(tmp_path, monkeypatch)
+    out_text = "\n\n".join(f"=== FILE: {n} ===\n내용 {n}" for n in J.APP_FILES)
+
+    def fake_claude(prompt, system, max_usd, schema=None, timeout=240):
+        assert timeout == 600
+        assert "사실" in system and "예시 0_JD.md" in system and "지원서류 규칙" in system
+        return {"result": out_text}
+
+    monkeypatch.setattr(J, "_claude", fake_claude)
+    files = J.draft_application("회사", "포지션", "공고 전문")
+    assert set(files) == set(J.APP_FILES)
+    assert files["0_JD.md"] == "내용 0_JD.md"
+
+
+def test_draft_application_raises_if_fewer_than_5(tmp_path, monkeypatch):
+    _setup_app_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(J, "_claude", lambda *a, **k: {
+        "result": "=== FILE: 0_JD.md ===\n내용만 하나"})
+    with pytest.raises(RuntimeError, match="5개"):
+        J.draft_application("회사", "포지션", "공고 전문")

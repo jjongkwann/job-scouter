@@ -1,5 +1,6 @@
 """io 큐 activity — 자격증명 없음. jobfeed 스크립트 subprocess + 공개 API."""
 import json
+import re
 import ssl
 import subprocess
 import urllib.request
@@ -7,7 +8,7 @@ from datetime import date
 
 from temporalio import activity
 
-from jobscouter.config import JOBFEED, PROPOSALS, PY, Target, _norm
+from jobscouter.config import APPLICATIONS, JOBFEED, PROPOSALS, PY, Target, _norm
 
 
 SCRIPTS = {"fetch_jobs.py", "refresh_due.py", "build.py"}
@@ -22,6 +23,7 @@ except ImportError:
     _SSL = None
 _HDR = {"User-Agent": "Mozilla/5.0", "wanted-os": "web"}
 REQ_CAP = 300  # DESIGN: requirements 300자 캡
+POSTING_CAP = 6000  # 지원서류 초안용 공고 전문 캡
 
 
 def _get(url: str) -> dict:
@@ -111,6 +113,39 @@ def fetch_requirements(t: Target) -> str:
     if not text:
         raise RuntimeError(f"{t.id}: 자격요건 없음 — 공고 내려갔거나 API 변경")
     return text[:REQ_CAP]
+
+
+@activity.defn
+def fetch_posting_full(t: Target) -> str:
+    """지원서류 초안용 공고 전문. fetch_requirements(300자 캡)와 달리 소개·주요업무·
+    자격요건·우대사항·복지까지 전부 담는다. 캡 6000자."""
+    if t.src == "wanted":
+        d = _get(f"https://www.wanted.co.kr/api/v4/jobs/{t.id}")
+        job = d["job"]
+        detail = job.get("detail") or {}
+        parts = {
+            "포지션": job.get("position", ""),
+            "회사": (job.get("company") or {}).get("name", ""),
+            "소개": detail.get("intro", ""),
+            "주요업무": detail.get("main_tasks", ""),
+            "자격요건": detail.get("requirements", ""),
+            "우대사항": detail.get("preferred_points", ""),
+            "혜택·복지": detail.get("benefits", ""),
+        }
+    else:
+        d = _get(f"https://jumpit-api.saramin.co.kr/api/position/{t.id[1:]}")
+        r = d["result"]
+        parts = {
+            "포지션": r.get("title", ""),
+            "회사": r.get("companyName", ""),
+            "주요업무": r.get("responsibility", ""),
+            "자격요건": r.get("qualifications", ""),
+            "우대사항": r.get("preferredRequirements", ""),
+        }
+    text = "\n\n".join(f"{k}: {v}" for k, v in parts.items() if v)
+    if not text:
+        raise RuntimeError(f"{t.id}: 공고 전문 없음 — 공고 내려갔거나 API 변경")
+    return text[:POSTING_CAP]
 
 
 def to_row(j: dict) -> list:
@@ -220,6 +255,38 @@ def reject_proposals(rejects: list[dict]) -> int:
     _commit_and_push(["jobfeed/candidates.json", f"jobfeed/{PROPOSALS}"],
                      f"job-scouter: 제외 {len(rejects)}건")
     return len(rejects)
+
+
+def _app_slug(company: str) -> str:
+    """회사명 → 폴더 slug. 영문 소문자·숫자·`_`, 한글은 그대로."""
+    s = re.sub(r"[^0-9A-Za-z가-힣]+", "_", company).strip("_")
+    return s.lower() or "company"
+
+
+@activity.defn
+def write_application(company: str, files: dict[str, str]) -> str:
+    """지원서류 5종(files) + README(파일 목록·체크리스트 스텁)을
+    applications/{slug}/에 쓴다. 이미 사람이 작업 중인 폴더는 덮어쓰지 않고
+    `_draft` 접미로 비켜 쓴다. commit+push."""
+    slug = _app_slug(company)
+    folder = APPLICATIONS / slug
+    if folder.exists():
+        folder = APPLICATIONS / f"{slug}_draft"
+    folder.mkdir(parents=True, exist_ok=True)
+    for name, content in files.items():
+        (folder / name).write_text(content)
+    readme = (
+        f"# {company} 지원서류\n\n상태: 초안 (자동 생성 {date.today().isoformat()})\n\n"
+        "## 파일\n" + "\n".join(f"- {n}" for n in sorted(files)) +
+        "\n\n## 지원 전 체크리스트\n"
+        "- [ ] 사실베이스 대조 — 초안의 수치·경력이 사실과 일치하는지 확인\n"
+        "- [ ] 회사 리서치 보강(평판·최근 뉴스)\n"
+        "- [ ] 최종 검수 후 제출\n"
+    )
+    (folder / "README.md").write_text(readme)
+    rel = folder.relative_to(JOBFEED.parent)
+    _commit_and_push([str(rel)], f"job-scouter: {company} 지원서류 초안")
+    return str(folder)
 
 
 @activity.defn

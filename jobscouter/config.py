@@ -27,6 +27,7 @@ JK_MD = JOBFEED.parent / "JK.md"
 REFERENCES = JOBFEED.parent / "references"
 DRAFTS = JOBFEED.parent / "drafts"
 APPLICATIONS = JOBFEED.parent / "applications"
+APP_EXAMPLE = _env("JOBSCOUTER_APP_EXAMPLE", "example")   # 형식 앵커 — applications/ 아래 회사 폴더명
 
 
 def _norm(s: str) -> str:

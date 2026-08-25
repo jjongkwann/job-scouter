@@ -1,5 +1,6 @@
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -123,6 +124,61 @@ def test_reject_proposals_records_skipped(tmp_path, monkeypatch):
     assert cand["skipped"]["777"] == ["제외회사", "포지션", "연봉 미공개"]
     props = json.loads((jobfeed / "proposals.json").read_text())
     assert "777" not in props
+
+
+def test_fetch_posting_full_wanted_and_jumpit(monkeypatch):
+    """소스별 필드 매핑."""
+    monkeypatch.setattr(io_acts, "_get", lambda url: {
+        "job": {"position": "백엔드", "company": {"name": "새회사"},
+                "detail": {"intro": "소개", "main_tasks": "업무",
+                           "requirements": "자격", "preferred_points": "우대",
+                           "benefits": "복지"}}})
+    t = Target(id="1", company="새회사", title="백엔드", src="wanted", url="u")
+    text = io_acts.fetch_posting_full(t)
+    assert "포지션: 백엔드" in text and "자격요건: 자격" in text
+
+    monkeypatch.setattr(io_acts, "_get", lambda url: {
+        "result": {"title": "E", "companyName": "새회사",
+                   "responsibility": "업무", "qualifications": "자격",
+                   "preferredRequirements": "우대"}})
+    t2 = Target(id="j555", company="새회사", title="E", src="jumpit", url="u")
+    text2 = io_acts.fetch_posting_full(t2)
+    assert "회사: 새회사" in text2 and "우대사항: 우대" in text2
+
+
+def test_fetch_posting_full_caps_at_6000(monkeypatch):
+    monkeypatch.setattr(io_acts, "_get", lambda url: {
+        "job": {"position": "백엔드", "company": {"name": "새회사"},
+                "detail": {"main_tasks": "업" * 8000}}})
+    t = Target(id="1", company="새회사", title="백엔드", src="wanted", url="u")
+    assert len(io_acts.fetch_posting_full(t)) == io_acts.POSTING_CAP
+
+
+def _init_git_repo(tmp_path):
+    subprocess.run(["git", "init", str(tmp_path)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "t"], check=True)
+
+
+def test_write_application_creates_5_files_and_readme_then_drafts_on_conflict(tmp_path, monkeypatch):
+    _init_git_repo(tmp_path)
+    jobfeed = tmp_path / "jobfeed"
+    jobfeed.mkdir()
+    monkeypatch.setattr(io_acts, "JOBFEED", jobfeed)
+    monkeypatch.setattr(io_acts, "APPLICATIONS", tmp_path / "applications")
+    files = {n: f"내용 {n}" for n in
+             ["0_JD.md", "1_맞춤_이력서.md", "2_자기소개서.md",
+              "3_면접지식맵.md", "4_포트폴리오_구성.md"]}
+
+    path = io_acts.write_application("테스트회사", files)
+    folder = Path(path)
+    assert folder.name == "테스트회사"   # 한글 그대로
+    for name, content in files.items():
+        assert (folder / name).read_text() == content
+    assert "지원 전 체크리스트" in (folder / "README.md").read_text()
+
+    path2 = io_acts.write_application("테스트회사", files)   # 폴더 이미 있음 → _draft 접미
+    assert Path(path2).name == "테스트회사_draft"
 
 
 def test_commit_outputs_no_change(tmp_path, monkeypatch):

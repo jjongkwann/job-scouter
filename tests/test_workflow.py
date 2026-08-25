@@ -75,7 +75,7 @@ async def fake_save_proposals(judged: list[dict]) -> int:
 
 @activity.defn(name="load_proposals")
 async def fake_load_proposals(ids: list[str]) -> list[dict]:
-    return [{"id": i, "company": f"c-{i}", "title": "포지션",
+    return [{"id": i, "company": f"c-{i}", "title": "포지션", "url": f"u-{i}", "src": "wanted",
              "scores": [30, 18, 20, 16, 0], "rubric_version": "v1"} for i in ids]
 
 
@@ -101,10 +101,28 @@ async def fake_commit_outputs() -> str:
     return "커밋됨"
 
 
+@activity.defn(name="fetch_posting_full")
+async def fake_fetch_posting_full(t: dict) -> str:
+    return f"공고전문:{t['id']}"
+
+
+@activity.defn(name="draft_application")
+async def fake_draft_application(company: str, title: str, posting: str) -> dict:
+    return {n: f"{company} {n}" for n in
+            ["0_JD.md", "1_맞춤_이력서.md", "2_자기소개서.md",
+             "3_면접지식맵.md", "4_포트폴리오_구성.md"]}
+
+
+@activity.defn(name="write_application")
+async def fake_write_application(company: str, files: dict) -> str:
+    return f"applications/{company}"
+
+
 _SCAN_ACTS = [fake_sync_repo, fake_run_script, fake_load_targets, fake_fetch_requirements,
              fake_search_context, fake_judge, fake_save_proposals]
 _PUB_ACTS = [fake_sync_repo, fake_load_proposals, fake_commit_rows, fake_reject_proposals,
-            fake_save_proposals, fake_run_script, fake_report, fake_commit_outputs]
+            fake_save_proposals, fake_run_script, fake_report, fake_commit_outputs,
+            fake_fetch_posting_full, fake_draft_application, fake_write_application]
 
 
 async def _run_scan(client: Client, params: ScanParams | None = None) -> dict:
@@ -205,6 +223,7 @@ async def test_publish_commits_approved_and_rejects():
         assert out["reject"] == 1
         assert out["report"]
         assert out["outputs"] == "커밋됨"
+        assert out["drafts"] == {"p0": "applications/c-p0"}   # approved 1건 → 초안 완료
     finally:
         await env.shutdown()
 

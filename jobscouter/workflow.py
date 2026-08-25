@@ -145,6 +145,25 @@ class Publish:
         out["build"] = await workflow.execute_activity(
             "run_script", "build.py", **_IO_OPTS)
 
+        self._stage = "지원서류 초안"
+        draft_opts = {**_LLM_OPTS, "start_to_close_timeout": timedelta(minutes=15)}
+        drafts: dict[str, str] = {}
+        for a in approved:
+            try:
+                target = {"id": a["id"], "company": a["company"], "title": a["title"],
+                          "src": a["src"], "url": a["url"]}
+                posting = await workflow.execute_activity(
+                    "fetch_posting_full", target, **_IO_OPTS)
+                files = await workflow.execute_activity(
+                    "draft_application", args=[a["company"], a["title"], posting],
+                    **draft_opts)
+                path = await workflow.execute_activity(
+                    "write_application", args=[a["company"], files], **_IO_OPTS)
+                drafts[a["id"]] = path
+            except Exception as e:
+                drafts[a["id"]] = f"실패: {e}"
+        out["drafts"] = drafts
+
         self._stage = "report"
         stats = {
             "published": len(approved), "rejected": len(params.rejects),

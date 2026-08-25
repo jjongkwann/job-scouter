@@ -11,8 +11,11 @@ from datetime import date
 
 from temporalio import activity
 
-from jobscouter.config import (DATA, FACTBASE, JOBFEED, JUDGE_MODEL, PROMPTS,
-                               JudgeInput, Judgment)
+from jobscouter.config import (APP_EXAMPLE, APPLICATIONS, DATA, FACTBASE, JK_MD,
+                               JOBFEED, JUDGE_MODEL, PROMPTS, JudgeInput, Judgment)
+
+APP_FILES = ["0_JD.md", "1_맞춤_이력서.md", "2_자기소개서.md",
+             "3_면접지식맵.md", "4_포트폴리오_구성.md"]
 
 RUBRIC_VERSION = "v1"
 EFFORT = "medium"
@@ -70,14 +73,14 @@ def _validate(s: list[int]) -> list[int]:
 
 
 def _claude(prompt: str, system: str, max_usd: float,
-            schema: dict | None = None) -> dict:
+            schema: dict | None = None, timeout: int = 240) -> dict:
     """claude -p 1회. 결과 JSON(structured_output·result·usage·total_cost_usd)을 돌려준다."""
     cmd = [CLAUDE, "-p", prompt, "--system-prompt", system, "--model", JUDGE_MODEL,
            "--effort", EFFORT, "--max-budget-usd", str(max_usd), *_LEAN]
     if schema:
         cmd += ["--json-schema", json.dumps(schema, ensure_ascii=False)]
     DATA.mkdir(exist_ok=True)
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=240, cwd=DATA)
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=DATA)
     try:
         d = json.loads(r.stdout)
     except ValueError:
@@ -124,6 +127,43 @@ def judge(inp: JudgeInput) -> Judgment:
     with _CACHE.open("a") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     return j
+
+
+def _example_docs() -> str:
+    folder = APPLICATIONS / APP_EXAMPLE
+    parts = [f"=== FILE: {name} ===\n{(folder / name).read_text()}"
+             for name in APP_FILES if (folder / name).exists()]
+    return "\n\n".join(parts)
+
+
+@activity.defn
+def draft_application(company: str, title: str, posting: str) -> dict[str, str]:
+    """승인 공고 1건의 지원서류 5종 초안. 사실베이스에 없는 주장 금지, 앵커 회사
+    (APP_EXAMPLE)의 형식(섹션·표)을 따른다. 스키마 없음 — 자유 텍스트를
+    `=== FILE: 이름 ===` 구분자로 split. 5개 미만이면 재시도용 예외."""
+    readme_path = APPLICATIONS / "README.md"
+    rules = readme_path.read_text() if readme_path.exists() else ""
+    system = (
+        f"<사실베이스>\n{FACTBASE.read_text()}\n</사실베이스>\n\n"
+        f"<JK.md>\n{JK_MD.read_text()}\n</JK.md>\n\n"
+        f"<지원서류 규칙>\n{rules}\n</지원서류 규칙>\n\n"
+        f"<형식 예시 — {APP_EXAMPLE}사>\n{_example_docs()}\n</형식 예시>"
+    )
+    prompt = (
+        f"회사: {company}\n포지션: {title}\n\n공고 전문:\n{posting}\n\n"
+        "위 정보로 지원서류 5개 문서를 작성하라. `=== FILE: 파일명 ===` 구분자로 나눠 "
+        "하나의 출력으로 이어 써라. 파일명은 정확히 이 순서·이름으로: "
+        + ", ".join(APP_FILES) + ". "
+        "사실베이스에 없는 주장은 절대 하지 말 것. 형식 예시의 섹션·표 구성을 유지할 것."
+    )
+    d = _claude(prompt, system, max_usd=1.0, timeout=600)
+    files: dict[str, str] = {}
+    for chunk in d["result"].split("=== FILE: ")[1:]:
+        name, _, body = chunk.partition(" ===")
+        files[name.strip()] = body.strip("\n")
+    if len(files) < 5:
+        raise RuntimeError(f"지원서류 초안 {len(files)}개뿐 — 5개 필요 (재시도)")
+    return files
 
 
 @activity.defn

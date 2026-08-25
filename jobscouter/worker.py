@@ -43,7 +43,8 @@ async def main() -> None:
                 io_acts.fetch_requirements, io_acts.commit_rows,
                 io_acts.sync_repo, io_acts.save_proposals,
                 io_acts.load_proposals, io_acts.reject_proposals,
-                io_acts.commit_outputs, search.search_context]
+                io_acts.commit_outputs, io_acts.fetch_posting_full,
+                io_acts.write_application, search.search_context]
         ex = ThreadPoolExecutor(4)
         workers = [
             Worker(client, task_queue=Q_WF, workflows=[DailyScan, Publish]),
@@ -95,7 +96,7 @@ async def main() -> None:
         from jobscouter.config import Q_LLM
         worker = Worker(
             client, task_queue=Q_LLM,
-            activities=[judge_mod.judge, judge_mod.report],
+            activities=[judge_mod.judge, judge_mod.report, judge_mod.draft_application],
             activity_executor=ThreadPoolExecutor(2),
             max_task_queue_activities_per_second=0.5)  # 레이트리밋은 큐 레벨
         print(f"llm 워커 시작 — {TEMPORAL} / {Q_LLM}")
