@@ -235,3 +235,22 @@ def test_sync_repo_pulls_when_remote_exists(monkeypatch, tmp_path):
     monkeypatch.setattr(io_acts.subprocess, "run", fake_run)
     assert io_acts.sync_repo() == "Already up to date."
     assert ["git", "-C", str(tmp_path), "pull", "--ff-only"] in calls
+
+
+def test_commit_and_push_skips_ignored_paths(tmp_path, monkeypatch):
+    """데이터 repo가 무시하는 파일(new.md)이 섞여도 add가 실패하지 않는다."""
+    import subprocess
+    repo = tmp_path / "repo"; (repo / "jobfeed").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t",
+                    "commit", "-q", "--allow-empty", "-m", "init"], check=True)
+    (repo / ".gitignore").write_text("jobfeed/new.md\n")
+    (repo / "jobfeed" / "new.md").write_text("x")
+    (repo / "jobfeed" / "jobs.jsonl").write_text("{}")
+    monkeypatch.setattr(io_acts, "JOBFEED", repo / "jobfeed")
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "t"); monkeypatch.setenv("GIT_AUTHOR_EMAIL", "t@t")
+    monkeypatch.setenv("GIT_COMMITTER_NAME", "t"); monkeypatch.setenv("GIT_COMMITTER_EMAIL", "t@t")
+    out = io_acts._commit_and_push(["jobfeed/jobs.jsonl", "jobfeed/new.md"], "t")
+    assert "변경 없음" not in out
+    log = subprocess.run(["git", "-C", str(repo), "log", "--oneline"], capture_output=True, text=True).stdout
+    assert log.count("\n") == 2   # init + 이번 커밋

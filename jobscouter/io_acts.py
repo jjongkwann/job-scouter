@@ -193,7 +193,11 @@ def _commit_and_push(paths: list[str], message: str) -> str:
     """git add한 paths를 커밋(+원격 있으면 push). 변경 없으면 git commit이 자연히
     no-op — 여기서 따로 diff를 재구현하지 않는다."""
     repo = str(JOBFEED.parent)
-    subprocess.run(["git", "-C", repo, "add", *paths], check=True)
+    # 데이터 repo의 .gitignore에 걸린 경로(예: new.md)는 git add가 exit 1 — 걸러낸다
+    paths = [p for p in paths if subprocess.run(
+        ["git", "-C", repo, "check-ignore", "-q", p]).returncode != 0]
+    if paths:
+        subprocess.run(["git", "-C", repo, "add", "--", *paths], check=True)
     r = subprocess.run(["git", "-C", repo, "commit", "-m", message],
                        capture_output=True, text=True)
     if r.returncode != 0:
