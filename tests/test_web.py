@@ -97,3 +97,10 @@ def test_publish_starts_workflow_with_ids_and_rejects(client, monkeypatch):
     assert r.status_code == 302
     assert r.headers["location"] == "/"
     assert calls == [(["111"], [{"id": "222", "why": "연봉 미공개"}])]
+
+
+def test_safe_url_blocks_non_http():
+    from jobscouter.web import _safe_url
+    assert _safe_url("javascript:alert(1)") == "#"
+    assert _safe_url("https://www.wanted.co.kr/wd/1") == "https://www.wanted.co.kr/wd/1"
+    assert _safe_url(None) == "#"

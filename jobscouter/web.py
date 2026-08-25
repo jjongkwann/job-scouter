@@ -20,6 +20,14 @@ from jobscouter.workflow import Publish
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 _jenv = Environment(autoescape=True)
 
+
+def _safe_url(u) -> str:
+    """외부 API에서 온 URL — http(s)만 링크로, 나머지는 '#' (javascript: 등 차단)."""
+    return u if isinstance(u, str) and u.lower().startswith(("http://", "https://")) else "#"
+
+
+_jenv.filters["safe_url"] = _safe_url
+
 CSS = """
 <style>
 body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 72rem; padding: 0 1rem; color: #222; }
@@ -58,7 +66,7 @@ _DASHBOARD = _jenv.from_string("""
 {% for p in proposals %}
 <tr>
 <td>{{ p.company }}</td>
-<td><a href="{{ p.url }}" target="_blank" rel="noopener">{{ p.title }}</a></td>
+<td><a href="{{ p.url|safe_url }}" target="_blank" rel="noopener">{{ p.title }}</a></td>
 <td>{{ p.scores|join(' / ') }}</td>
 <td>{{ p.total }}</td>
 <td>{{ '%.2f'|format(p.confidence or 0) }}</td>
