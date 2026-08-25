@@ -8,7 +8,7 @@ from datetime import date
 
 from temporalio import activity
 
-from jobscouter.config import APPLICATIONS, JOBFEED, PROPOSALS, PY, Target, _norm
+from jobscouter.config import APP_FILES, APPLICATIONS, JOBFEED, PROPOSALS, PY, Target, _norm
 
 
 SCRIPTS = {"fetch_jobs.py", "refresh_due.py", "build.py"}
@@ -272,7 +272,10 @@ def write_application(company: str, files: dict[str, str]) -> str:
     """지원서류 5종(files) + README(파일 목록·체크리스트 스텁)을
     applications/{slug}/에 쓴다. 이미 사람이 작업 중인 폴더는 덮어쓰지 않고
     `_draft` 접미로 비켜 쓴다. commit+push."""
-    slug = _app_slug(company)
+    slug = _app_slug(company)   # 정규식이 경로 문자를 전부 제거 — 탈출 불가
+    files = {n: c for n, c in files.items() if n in APP_FILES}  # LLM이 준 파일명은 allowlist만
+    if len(files) < len(APP_FILES):
+        raise ValueError(f"지원서류 파일 부족: {sorted(files)}")
     folder = APPLICATIONS / slug
     if folder.exists():
         folder = APPLICATIONS / f"{slug}_draft"

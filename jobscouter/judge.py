@@ -11,11 +11,9 @@ from datetime import date
 
 from temporalio import activity
 
-from jobscouter.config import (APP_EXAMPLE, APPLICATIONS, DATA, FACTBASE, JK_MD,
+from jobscouter.config import (APP_FILES, APP_EXAMPLE, APPLICATIONS, DATA, FACTBASE, JK_MD,
                                JOBFEED, JUDGE_MODEL, PROMPTS, JudgeInput, Judgment)
 
-APP_FILES = ["0_JD.md", "1_맞춤_이력서.md", "2_자기소개서.md",
-             "3_면접지식맵.md", "4_포트폴리오_구성.md"]
 
 RUBRIC_VERSION = "v1"
 EFFORT = "medium"

@@ -81,3 +81,7 @@ class Judgment:
     rubric_version: str = ""
     usage: dict = field(default_factory=dict)   # {in,out,cache_read,model,ms}
     cached: bool = False
+
+# 지원서류 5종 — draft_application 출력·write_application allowlist (LLM 출력 파일명을 경로로 쓰지 않는다)
+APP_FILES = ["0_JD.md", "1_맞춤_이력서.md", "2_자기소개서.md",
+             "3_면접지식맵.md", "4_포트폴리오_구성.md"]

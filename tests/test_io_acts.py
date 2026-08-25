@@ -254,3 +254,16 @@ def test_commit_and_push_skips_ignored_paths(tmp_path, monkeypatch):
     assert "변경 없음" not in out
     log = subprocess.run(["git", "-C", str(repo), "log", "--oneline"], capture_output=True, text=True).stdout
     assert log.count("\n") == 2   # init + 이번 커밋
+
+
+def test_write_application_rejects_traversal_names(tmp_path, monkeypatch):
+    import pytest
+    from jobscouter.config import APP_FILES
+    monkeypatch.setattr(io_acts, "APPLICATIONS", tmp_path / "applications")
+    monkeypatch.setattr(io_acts, "JOBFEED", tmp_path / "jobfeed")
+    monkeypatch.setattr(io_acts, "_commit_and_push", lambda paths, msg: "ok")
+    bad = {**{n: "x" for n in APP_FILES[:-1]}, "../../evil.md": "x"}
+    with pytest.raises(ValueError):
+        io_acts.write_application("회사", bad)          # 탈출 파일명은 걸러지고 5종 미달로 거부
+    assert not (tmp_path / "evil.md").exists()
+    assert io_acts._app_slug("../x/..") == "x"   # slug는 경로 문자를 제거한다
