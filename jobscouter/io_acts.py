@@ -1,6 +1,5 @@
 """io 큐 activity — 자격증명 없음. jobfeed 스크립트 subprocess + 공개 API."""
 import json
-import re
 import ssl
 import subprocess
 import urllib.request
@@ -8,7 +7,7 @@ from datetime import date
 
 from temporalio import activity
 
-from jobscouter.config import JOBFEED, PROPOSALS, PY, Target
+from jobscouter.config import JOBFEED, PROPOSALS, PY, Target, _norm
 
 
 SCRIPTS = {"fetch_jobs.py", "refresh_due.py", "build.py"}
@@ -23,13 +22,6 @@ except ImportError:
     _SSL = None
 _HDR = {"User-Agent": "Mozilla/5.0", "wanted-os": "web"}
 REQ_CAP = 300  # DESIGN: requirements 300자 캡
-
-
-def _norm(s: str) -> str:
-    """fetch_jobs.py의 회사명 정규화와 동일해야 제외 집합이 맞는다."""
-    s = re.sub(r"\(주\)|주식회사|㈜|Inc\.?|Ltd\.?", "", s)
-    s = re.sub(r"\([^)]*\)", "", s)
-    return re.sub(r"\s+", "", s).lower()
 
 
 def _get(url: str) -> dict:

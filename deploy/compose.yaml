@@ -60,6 +60,25 @@ services:
     depends_on:
       - temporal
 
+  web:
+    build: ..
+    command: ["/app/.venv/bin/uvicorn", "jobscouter.web:app", "--host", "0.0.0.0", "--port", "8090"]
+    ports:
+      - "8090:8090"   # LAN 대시보드 — 인증 없음, 포트포워딩 금지
+    environment:
+      PYTHONUNBUFFERED: "1"
+      JOBSCOUTER_TEMPORAL: temporal:7233
+      JOBSCOUTER_ES: http://host.docker.internal:9200
+      JOBSCOUTER_JOBFEED: /work/repo/jobfeed
+      JOBSCOUTER_FACTBASE: /work/repo/references/이력서_사실베이스.md
+      JOBSCOUTER_PROMPTS: /work/repo/job-scouter/prompts
+      JOBSCOUTER_PY: /app/.venv/bin/python
+    volumes:
+      - ${DATA_REPO}:/work/repo
+    restart: always
+    depends_on:
+      - temporal
+
 volumes:
   hf-cache:
   jobscouter-data:

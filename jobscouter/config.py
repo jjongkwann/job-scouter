@@ -1,5 +1,6 @@
 """공유 상수·타입. 머신별 값(서버 주소·데이터 경로)은 .env로 — .env.example 참조."""
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,6 +21,19 @@ PY = _env("JOBSCOUTER_PY", sys.executable)
 Q_WF, Q_IO, Q_LLM = "jobscout-wf", "jobscout-io", "jobscout-llm"
 JUDGE_MODEL = _env("JOBSCOUTER_MODEL", "claude-sonnet-5")
 PROPOSALS = "proposals.json"   # JOBFEED 아래 — 판정됐지만 등재/거부 전인 후보
+
+# 데이터 repo 레이아웃(JOBFEED.parent가 루트) — 웹앱 열람·지원서류 초안이 쓴다
+JK_MD = JOBFEED.parent / "JK.md"
+REFERENCES = JOBFEED.parent / "references"
+DRAFTS = JOBFEED.parent / "drafts"
+APPLICATIONS = JOBFEED.parent / "applications"
+
+
+def _norm(s: str) -> str:
+    """회사명 정규화 — fetch_jobs.py·io_acts·web이 전부 이 기준으로 맞춰야 제외/매칭 집합이 맞는다."""
+    s = re.sub(r"\(주\)|주식회사|㈜|Inc\.?|Ltd\.?", "", s)
+    s = re.sub(r"\([^)]*\)", "", s)
+    return re.sub(r"\s+", "", s).lower()
 
 
 @dataclass
