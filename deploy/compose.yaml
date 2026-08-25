@@ -1,4 +1,4 @@
-# 서버(OrbStack) 상시 가동 3서비스. temporal은 워크플로 서버, io/llm은 워커.
+# 서버 상시 가동 서비스. temporal은 워크플로 서버, io/llm은 워커.
 # 변수(DATA_REPO·CLAUDE_CODE_OAUTH_TOKEN·GIT_AUTHOR_*)는 deploy/.env — server.env.example 참조.
 name: jobscouter
 

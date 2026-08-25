@@ -23,7 +23,7 @@ JUDGE_MODEL = _env("JOBSCOUTER_MODEL", "claude-sonnet-5")
 PROPOSALS = "proposals.json"   # JOBFEED 아래 — 판정됐지만 등재/거부 전인 후보
 RESUME_PROPOSALS = "resume_proposals.json"   # JOBFEED 아래 — ResumeSync 제안, 사람 승인 대기
 
-PKB_INDEX = "pkb_documents"   # 미니 ES — 개인 지식베이스. ResumeSync만 읽는다(쓰기 금지)
+PKB_INDEX = "pkb_documents"   # 서버 ES — 개인 지식베이스. ResumeSync만 읽는다(쓰기 금지)
 # personal-docs/src/pkb/retrieve.py의 profile_filter("curated")는 doc_type이
 # concept/guide/moc이고 status가 canonical/active인 문서만 남긴다. 2026-08-25 실측 기준
 # 그 조건을 만족하는 카테고리는 전부 "agent"(기술 학습 노트)뿐이라 경력·프로젝트 발췌로는

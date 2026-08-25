@@ -1,6 +1,6 @@
 # 서버 설정
 
-워커(io·llm)와 Temporal은 서버(OrbStack docker)에 컨테이너 3개로 상시
+워커(io·llm)와 Temporal은 서버(docker)에 컨테이너 3개로 상시
 가동한다. Elasticsearch는 서버 호스트에 네이티브로 떠 있고(:9200, localhost 바인드),
 컨테이너는 `host.docker.internal`로 붙는다. jobfeed 데이터는 GitHub private repo를
 서버 호스트에 clone해 컨테이너에 마운트한다.

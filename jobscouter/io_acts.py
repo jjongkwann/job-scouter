@@ -58,7 +58,7 @@ def _has_remote(repo: str) -> bool:
 
 @activity.defn
 def sync_repo() -> str:
-    """사이클 시작 시 jobfeed repo를 원격과 동기화(미니 워커 ↔ 맥북).
+    """사이클 시작 시 jobfeed repo를 원격과 동기화(서버 워커 ↔ 작업 머신).
     원격 없으면(맥북 단독 개발) 예외 없이 생략. pull 전 워킹트리가 더러우면(이전
     실행이 fetch 산출물을 커밋 못 하고 끝난 경우) stash 대신 그대로 커밋한다 —
     단순·결정적이고, 남은 흔적은 사람이 히스토리에서 나중에 봐도 된다."""
