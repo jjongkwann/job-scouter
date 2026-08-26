@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import subprocess
+import tempfile
 import time
 from datetime import date
 
@@ -97,13 +98,23 @@ def _validate(s: list[int]) -> list[int]:
 
 def _claude(prompt: str, system: str, max_usd: float,
             schema: dict | None = None, timeout: int = 240) -> dict:
-    """claude -p 1회. 결과 JSON(structured_output·result·usage·total_cost_usd)을 돌려준다."""
-    cmd = [CLAUDE, "-p", prompt, "--system-prompt", system, "--model", JUDGE_MODEL,
+    """claude -p 1회. 결과 JSON(structured_output·result·usage·total_cost_usd)을 돌려준다.
+
+    프롬프트는 argv로 넘기지 않는다 — 리눅스는 인수 하나가 128KB를 넘으면 실행 자체가
+    실패한다(E2BIG, 실측: 초안 시스템 프롬프트 = 사실베이스+JK.md ≈ 110KB). 시스템 프롬프트는
+    파일, 사용자 프롬프트는 stdin."""
+    cmd = [CLAUDE, "-p", "--model", JUDGE_MODEL,
            "--effort", EFFORT, "--max-budget-usd", str(max_usd), *_LEAN]
     if schema:
         cmd += ["--json-schema", json.dumps(schema, ensure_ascii=False)]
     DATA.mkdir(exist_ok=True)
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=DATA)
+    with tempfile.NamedTemporaryFile("w", suffix=".md", dir=DATA, delete=False) as f:
+        f.write(system)
+    try:
+        r = subprocess.run(cmd + ["--system-prompt-file", f.name], input=prompt,
+                           capture_output=True, text=True, timeout=timeout, cwd=DATA)
+    finally:
+        os.unlink(f.name)
     try:
         d = json.loads(r.stdout)
     except ValueError:
