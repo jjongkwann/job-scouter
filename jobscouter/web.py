@@ -184,6 +184,8 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px}
 .card .m{font-size:11px;color:var(--dim);margin-top:3px;font-variant-numeric:tabular-nums}
 .card.none .t{color:var(--faint)}
 .empty{padding:32px;text-align:center;color:var(--dim);border:1px dashed var(--line);border-radius:9px;background:var(--row);font-size:13px;margin-bottom:12px}
+.notice{padding:10px 14px;border:1px solid var(--line);border-radius:9px;background:var(--row);font-size:12.5px;margin-bottom:12px;line-height:1.5}
+.notice.bad{border-color:var(--rail-bad);background:var(--badbg);color:var(--bad)}
 footer{margin-top:32px;padding-top:18px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px}
 footer p{margin:0 0 7px}
 @media(max-width:1060px){.dash .head,.rp .head,.rep .head{display:none}
@@ -206,6 +208,10 @@ _STATS = _jenv.from_string("""<div class="stats">{% for n, l in items %}
 <div class="stat"><div class="n">{{ n }}</div><div class="l">{{ l }}</div></div>{% endfor %}</div>""")
 
 _DASHBOARD = _jenv.from_string("""
+{% if pub and pub.status == 'RUNNING' %}<div class="notice">Publish 실행 중 ({{ pub.start }}) — 승인 {{ pub.ids|length }}건 · 거부 {{ pub.reject_ids|length }}건 처리 중.
+등재·거부는 먼저 반영되고, 지원서류 초안과 보고서는 몇 분 더 걸립니다. 끝나기 전에는 제출할 수 없습니다 — 새로고침하면 갱신됩니다.</div>
+{% elif pub and pub.status == 'FAILED' %}<div class="notice bad">마지막 Publish 실패 ({{ pub.start }}): {{ pub.error }}
+— 등재·거부는 앞 단계라 반영됐을 수 있고, 초안·보고서는 만들어지지 않았습니다. 초안은 <code>worker draft &lt;공고id&gt;</code>로 다시 만듭니다.</div>{% endif %}
 <div class="legend"><span>행 왼쪽 색띠 = 평판 판정 (후보목록과 동일)</span>
 <span class="k"><i class="sw" style="background:var(--rail-good)"></i>괜찮음</span>
 <span class="k"><i class="sw" style="background:var(--rail-warn)"></i>주의</span>
@@ -231,8 +237,9 @@ _DASHBOARD = _jenv.from_string("""
 <div class="empty">대기 중인 후보 없음 — 다음 DailyScan은 매일 09:07</div>
 {% endfor %}
 </div>
-<div class="actions"><span>승인 체크 · 거부 사유 입력 후 제출하면 Publish 워크플로가 등재·판례·지원서류 초안·보고서를 한 번에 처리합니다</span>
-<button class="btn primary" type="submit">제출</button></div>
+<div class="actions">{% if busy %}<span>실행 중인 Publish가 끝나면 제출할 수 있습니다</span>
+{% else %}<span>승인 체크 · 거부 사유 입력 후 제출하면 Publish 워크플로가 등재·판례·지원서류 초안·보고서를 한 번에 처리합니다</span>
+<button class="btn primary" type="submit">제출</button>{% endif %}</div>
 </form>
 
 <h2>평판 미조사 회사<span class="c">{{ unresearched|length }}</span></h2>
@@ -388,7 +395,8 @@ async def recent_runs() -> list[dict]:
     client = await Client.connect(TEMPORAL)
     out = []
     async for wf in client.list_workflows(
-            " OR ".join(f"WorkflowType='{t}'" for t in ("DailyScan", "Publish", "ResumeSync", "ApplyResume")),
+            " OR ".join(f"WorkflowType='{t}'" for t in
+                        ("DailyScan", "Publish", "ResumeSync", "ApplyResume", "Draft")),
             limit=30):
         out.append({"type": wf.workflow_type,
                     "status": wf.status.name if wf.status else "?",
@@ -396,12 +404,52 @@ async def recent_runs() -> list[dict]:
     return sorted(out, key=lambda r: r["start"], reverse=True)[:6]
 
 
+async def latest_publish() -> dict | None:
+    """가장 최근 Publish 한 건. 실행 중이면 입력(승인·거부 id) — 대시보드가 그 행을 '처리 중'으로
+    숨기고 제출을 막는다. 실패면 원인 메시지 — 제출 직후 화면이 그대로라 실패를 모르고 지나치지 않게."""
+    client = await Client.connect(TEMPORAL)
+    latest = None
+    async for wf in client.list_workflows("WorkflowType='Publish'", limit=30):
+        if latest is None or wf.start_time > latest.start_time:
+            latest = wf
+    if latest is None:
+        return None
+    info = {"id": latest.id, "status": latest.status.name if latest.status else "?",
+            "start": latest.start_time.astimezone(KST).strftime("%Y-%m-%d %H:%M"),
+            "ids": [], "reject_ids": [], "error": ""}
+    handle = client.get_workflow_handle(latest.id)
+    if info["status"] == "RUNNING":
+        hist = await handle.fetch_history()
+        payload = hist.events[0].workflow_execution_started_event_attributes.input.payloads[0]
+        params = json.loads(payload.data)
+        info["ids"] = [str(i) for i in params.get("ids") or []]
+        info["reject_ids"] = [str(r["id"]) for r in params.get("rejects") or []]
+    elif info["status"] == "FAILED":
+        try:
+            await handle.result()
+        except Exception as e:   # WorkflowFailureError → ActivityError → ApplicationError 순으로 원인이 감싸여 있다
+            err = e
+            while getattr(err, "cause", None):
+                err = err.cause
+            info["error"] = getattr(err, "message", None) or str(err)
+    return info
+
+
+async def _latest_publish_safe() -> dict | None:
+    try:
+        return await latest_publish()
+    except Exception:
+        return None
+
+
 # --- 라우트 ---
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
     rep = _reputation()
-    proposals = [_decorate(p, rep) for p in _load_proposals()]
+    pub = await _latest_publish_safe()
+    busy = set(pub["ids"]) | set(pub["reject_ids"]) if pub and pub["status"] == "RUNNING" else set()
+    proposals = [_decorate(p, rep) for p in _load_proposals() if str(p["id"]) not in busy]
     unresearched = sorted({p["company"] for p in proposals if _norm(p["company"]) not in rep})
     runs, runs_error = None, None
     try:
@@ -412,7 +460,8 @@ async def dashboard():
                                  (sum(1 for p in proposals if p.get("total", 0) >= 75), "적합도 75+"),
                                  (len(unresearched), "평판 미조사 회사"), ("09:07", "다음 DailyScan")])
     body = stats + _DASHBOARD.render(proposals=proposals, unresearched=unresearched,
-                                     runs=runs, runs_error=runs_error)
+                                     runs=runs, runs_error=runs_error, pub=pub,
+                                     busy=bool(busy) or (pub is not None and pub["status"] == "RUNNING"))
     return _render("승인 대기", body, active="대시보드",
                    sub="<b>DailyScan</b>이 매일 09:07 새 공고를 판정한 뒤 아직 결정하지 않은 후보입니다. "
                        "승인하면 <b>후보목록에 등재</b>되고 지원서류 초안 5종이 만들어지며, 거부 사유를 적으면 판례로 남아 다음 판정에 참고됩니다.",
@@ -421,6 +470,10 @@ async def dashboard():
 
 @app.post("/publish")
 async def publish(request: Request):
+    pub = await _latest_publish_safe()
+    if pub and pub["status"] == "RUNNING":
+        # 동시에 두 Publish가 같은 repo에 커밋·push하면 충돌한다 — 끝난 뒤 다시
+        raise HTTPException(409, "Publish 실행 중 — 끝난 뒤 다시 제출")
     form = await request.form()
     ids = form.getlist("approve")
     rejects = [{"id": k[len("why_"):], "why": v.strip()}

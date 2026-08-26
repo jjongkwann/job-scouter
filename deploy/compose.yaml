@@ -53,7 +53,10 @@ services:
     volumes:
       - ${DATA_REPO}:/work/repo
       - jobscouter-data:/app/data
-      - ${HOME}/.claude/.credentials.json:/root/.claude/.credentials.json   # 호스트 Claude Code 로그인 공유 (없으면 CLAUDE_CODE_OAUTH_TOKEN)
+      # 호스트 Claude Code 로그인 공유 — 디렉터리째 마운트. 파일 하나만 마운트하면 호스트가 토큰을
+      # 갱신(원자적 교체)할 때 inode가 바뀌어 컨테이너 쪽이 깨진다(2026-08-26 실측: Not logged in).
+      # 없으면 CLAUDE_CODE_OAUTH_TOKEN(.env)로 대체.
+      - ${HOME}/.claude:/root/.claude
     extra_hosts:
       - host.docker.internal:host-gateway
     restart: always

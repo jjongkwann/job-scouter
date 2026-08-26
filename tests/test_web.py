@@ -136,6 +136,27 @@ def test_resume_apply_starts_workflow(client, monkeypatch):
     assert calls == [["abc12345"]]
 
 
+def test_running_publish_hides_its_rows_and_blocks_submit(client, monkeypatch):
+    async def running():
+        return {"id": "publish-x", "status": "RUNNING", "start": "2026-08-26 14:00",
+                "ids": [], "reject_ids": ["111"], "error": ""}
+    monkeypatch.setattr(web, "latest_publish", running)
+    r = client.get("/")
+    assert "Publish 실행 중" in r.text
+    assert "테스트회사" not in r.text.split("평판 미조사 회사")[0]   # 처리 중인 행은 숨긴다
+    assert client.post("/publish", data={"approve": ["111"]}).status_code == 409
+
+
+def test_failed_publish_shows_cause(client, monkeypatch):
+    async def failed():
+        return {"id": "publish-x", "status": "FAILED", "start": "2026-08-26 14:00",
+                "ids": [], "reject_ids": [], "error": "claude -p 실패: Not logged in"}
+    monkeypatch.setattr(web, "latest_publish", failed)
+    r = client.get("/")
+    assert "마지막 Publish 실패" in r.text and "Not logged in" in r.text
+    assert "테스트회사" in r.text   # 실패했으면 행은 그대로 보인다
+
+
 def test_security_headers_and_csp(client):
     r = client.get("/")
     assert "script-src" not in r.headers["content-security-policy"]   # 기본은 스크립트 전면 차단

@@ -118,6 +118,12 @@ async def fake_write_application(company: str, files: dict) -> str:
     return f"applications/{company}"
 
 
+@activity.defn(name="listed_target")
+async def fake_listed_target(cid: str) -> dict:
+    return {"id": cid, "company": f"c-{cid}", "title": "t", "src": "wanted",
+            "url": f"https://www.wanted.co.kr/wd/{cid}"}
+
+
 _SCAN_ACTS = [fake_sync_repo, fake_run_script, fake_load_targets, fake_fetch_requirements,
              fake_search_context, fake_judge, fake_save_proposals]
 _PUB_ACTS = [fake_sync_repo, fake_load_proposals, fake_commit_rows, fake_reject_proposals,
@@ -135,6 +141,7 @@ async def _run_scan(client: Client, params: ScanParams | None = None) -> dict:
         import jobscouter.workflow as wf
         wf._IO_OPTS["task_queue"] = q
         wf._LLM_OPTS["task_queue"] = q
+        wf._DRAFT_OPTS["task_queue"] = q
         handle = await client.start_workflow(
             DailyScan.run, params or ScanParams(), id=f"wf-{uuid.uuid4()}", task_queue=q)
         return await handle.result()
@@ -147,6 +154,7 @@ async def _run_publish(client: Client, params: PublishParams) -> dict:
         import jobscouter.workflow as wf
         wf._IO_OPTS["task_queue"] = q
         wf._LLM_OPTS["task_queue"] = q
+        wf._DRAFT_OPTS["task_queue"] = q
         handle = await client.start_workflow(
             Publish.run, params, id=f"wf-{uuid.uuid4()}", task_queue=q)
         return await handle.result()
@@ -228,6 +236,25 @@ async def test_publish_commits_approved_and_rejects():
         await env.shutdown()
 
 
+@pytest.mark.asyncio
+async def test_draft_regenerates_application_for_listed_posting():
+    from jobscouter.workflow import Draft
+    env = await WorkflowEnvironment.start_time_skipping()
+    try:
+        q = f"test-{uuid.uuid4()}"
+        async with Worker(env.client, task_queue=q, workflows=[Draft],
+                          activities=[fake_sync_repo, fake_listed_target, fake_fetch_posting_full,
+                                      fake_draft_application, fake_write_application],
+                          workflow_runner=UnsandboxedWorkflowRunner()):
+            import jobscouter.workflow as wf
+            for opts in (wf._IO_OPTS, wf._LLM_OPTS, wf._DRAFT_OPTS):
+                opts["task_queue"] = q
+            out = await env.client.execute_workflow(Draft.run, "382461", id=f"draft-{q}", task_queue=q)
+        assert out == "applications/c-382461"
+    finally:
+        await env.shutdown()
+
+
 PROPOSE_CALLS: list[str] = []
 SAVED_RESUME: list[tuple] = []
 APPLIED_IDS: list[list] = []
@@ -281,6 +308,7 @@ async def _run_resume_sync(client: Client, resume_hash_act) -> dict:
         import jobscouter.workflow as wf
         wf._IO_OPTS["task_queue"] = q
         wf._LLM_OPTS["task_queue"] = q
+        wf._DRAFT_OPTS["task_queue"] = q
         handle = await client.start_workflow(
             ResumeSync.run, id=f"wf-{uuid.uuid4()}", task_queue=q)
         return await handle.result()
@@ -348,6 +376,7 @@ async def test_running_handle_finds_cycle():
             import jobscouter.workflow as wf
             wf._IO_OPTS["task_queue"] = q
             wf._LLM_OPTS["task_queue"] = q
+            wf._DRAFT_OPTS["task_queue"] = q
             started = await env.client.start_workflow(
                 DailyScan.run, ScanParams(), id=f"wf-{uuid.uuid4()}", task_queue=q)
             from jobscouter.worker import _running_handle

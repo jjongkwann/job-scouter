@@ -17,6 +17,27 @@ _LLM_OPTS = dict(
     start_to_close_timeout=timedelta(minutes=5),
     retry_policy=RetryPolicy(maximum_attempts=3),
 )
+_DRAFT_OPTS = {**_LLM_OPTS, "start_to_close_timeout": timedelta(minutes=15)}
+
+
+async def _draft(target: dict) -> str:
+    """공고 전문 → LLM 초안 5종 → applications/에 기록(커밋·push). Publish와 Draft가 공유."""
+    posting = await workflow.execute_activity("fetch_posting_full", target, **_IO_OPTS)
+    files = await workflow.execute_activity(
+        "draft_application", args=[target["company"], target["title"], posting], **_DRAFT_OPTS)
+    return await workflow.execute_activity(
+        "write_application", args=[target["company"], files], **_IO_OPTS)
+
+
+@workflow.defn
+class Draft:
+    """등재된 공고 하나의 지원서류 초안 (재)생성 — Publish 도중 LLM이 실패했을 때 복구용."""
+
+    @workflow.run
+    async def run(self, cid: str) -> str:
+        await workflow.execute_activity("sync_repo", **_IO_OPTS)
+        target = await workflow.execute_activity("listed_target", cid, **_IO_OPTS)
+        return await _draft(target)
 
 
 @workflow.defn
@@ -146,21 +167,13 @@ class Publish:
             "run_script", "build.py", **_IO_OPTS)
 
         self._stage = "지원서류 초안"
-        draft_opts = {**_LLM_OPTS, "start_to_close_timeout": timedelta(minutes=15)}
         drafts: dict[str, str] = {}
         for a in approved:
             try:
-                target = {"id": a["id"], "company": a["company"], "title": a["title"],
-                          "src": a["src"], "url": a["url"]}
-                posting = await workflow.execute_activity(
-                    "fetch_posting_full", target, **_IO_OPTS)
-                files = await workflow.execute_activity(
-                    "draft_application", args=[a["company"], a["title"], posting],
-                    **draft_opts)
-                path = await workflow.execute_activity(
-                    "write_application", args=[a["company"], files], **_IO_OPTS)
-                drafts[a["id"]] = path
+                drafts[a["id"]] = await _draft(
+                    {k: a[k] for k in ("id", "company", "title", "src", "url")})
             except Exception as e:
+                # 등재는 이미 끝났으므로 여기서 멈추지 않는다 — `worker draft <id>`로 다시 만든다
                 drafts[a["id"]] = f"실패: {e}"
         out["drafts"] = drafts
 

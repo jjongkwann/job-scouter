@@ -261,6 +261,21 @@ def load_proposals(ids: list[str]) -> list[dict]:
 
 
 @activity.defn
+def listed_target(cid: str) -> dict:
+    """등재된 공고 id → Target dict — Publish에서 LLM이 실패해 잃은 초안을 다시 만들 때.
+    회사·제목은 candidates.json 행에서, src·url은 id 관례(j접두=점핏)에서 정한다."""
+    cand = json.loads((JOBFEED / "candidates.json").read_text())
+    for r in cand["rows"]:
+        if str(r[2]) == cid:
+            jumpit = cid.startswith("j")
+            return {"id": cid, "company": r[1], "title": r[0],
+                    "src": "jumpit" if jumpit else "wanted",
+                    "url": (f"https://jumpit.saramin.co.kr/position/{cid[1:]}" if jumpit
+                            else f"https://www.wanted.co.kr/wd/{cid}")}
+    raise ValueError(f"candidates.json 등재 행에 {cid} 없음 — 등재된 공고만 초안을 만든다")
+
+
+@activity.defn
 def reject_proposals(rejects: list[dict]) -> int:
     """candidates.json skipped[id] = [company, title, why] 기록 + proposals에서 제거."""
     if not rejects:

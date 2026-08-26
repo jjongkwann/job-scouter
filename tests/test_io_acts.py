@@ -402,3 +402,16 @@ def test_reindex_facts_delegates_to_index_es(monkeypatch):
 
     assert io_acts.reindex_facts() == "jobscout_facts: 7건"
     assert calls == ["fake-client"]
+
+
+def test_listed_target_from_candidates(tmp_path, monkeypatch):
+    (tmp_path / "candidates.json").write_text(json.dumps({
+        "rows": [["Senior Backend", "딜라이트룸", 382461, [22, 10, 20, 20, -5], None, "x", [], None],
+                 ["FDE", "에스투더블유", "j54736975", [30, 18, 20, 12], None, "x", [], None]],
+        "skipped": {}}))
+    monkeypatch.setattr(io_acts, "JOBFEED", tmp_path)
+    t = io_acts.listed_target("382461")
+    assert (t["company"], t["src"], t["url"]) == ("딜라이트룸", "wanted", "https://www.wanted.co.kr/wd/382461")
+    assert io_acts.listed_target("j54736975")["url"] == "https://jumpit.saramin.co.kr/position/54736975"
+    with pytest.raises(ValueError):
+        io_acts.listed_target("999")

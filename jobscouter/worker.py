@@ -7,6 +7,7 @@
     uv run python -m jobscouter.worker reject <id> "<사유>"  # Publish 시작 (거부만)
     uv run python -m jobscouter.worker resume-sync            # ResumeSync 시작
     uv run python -m jobscouter.worker apply-resume id1 ...   # ApplyResume 시작 (제안 반영)
+    uv run python -m jobscouter.worker draft <공고id>          # 등재 공고 지원서류 초안 재생성
     uv run python -m jobscouter.worker status                # 실행 중 사이클 조회
     uv run python -m jobscouter.worker schedule               # 자동 시작 등록(일 1회 스캔·주 1회 이력서)
 """
@@ -29,7 +30,7 @@ async def _running_handle(client: Client):
     """실행 중인 사이클 핸들. 스케줄 시작 워크플로는 id가 매번 달라 검색으로 찾는다."""
     async for wf in client.list_workflows(
             "(WorkflowType='DailyScan' OR WorkflowType='Publish' "
-            "OR WorkflowType='ResumeSync' OR WorkflowType='ApplyResume') "
+            "OR WorkflowType='ResumeSync' OR WorkflowType='ApplyResume' OR WorkflowType='Draft') "
             "AND ExecutionStatus='Running'"):
         return client.get_workflow_handle(wf.id)
     sys.exit("실행 중인 사이클이 없다")
@@ -41,11 +42,11 @@ async def main() -> None:
 
     if cmd == "io":
         from jobscouter import io_acts, search
-        from jobscouter.workflow import ApplyResume, DailyScan, Publish, ResumeSync
+        from jobscouter.workflow import ApplyResume, DailyScan, Draft, Publish, ResumeSync
         acts = [io_acts.run_script, io_acts.load_targets,
                 io_acts.fetch_requirements, io_acts.commit_rows,
                 io_acts.sync_repo, io_acts.save_proposals,
-                io_acts.load_proposals, io_acts.reject_proposals,
+                io_acts.load_proposals, io_acts.reject_proposals, io_acts.listed_target,
                 io_acts.commit_outputs, io_acts.fetch_posting_full,
                 io_acts.write_application, search.search_context,
                 io_acts.pkb_snapshot, io_acts.resume_state_hash,
@@ -54,7 +55,7 @@ async def main() -> None:
         ex = ThreadPoolExecutor(4)
         workers = [
             Worker(client, task_queue=Q_WF,
-                   workflows=[DailyScan, Publish, ResumeSync, ApplyResume]),
+                   workflows=[DailyScan, Publish, ResumeSync, ApplyResume, Draft]),
             Worker(client, task_queue=Q_IO, activities=acts, activity_executor=ex),
         ]
         print(f"io 워커 시작 — {TEMPORAL} / {Q_WF}, {Q_IO}")
@@ -104,6 +105,14 @@ async def main() -> None:
         from jobscouter.workflow import ApplyResume
         handle = await client.start_workflow(
             ApplyResume.run, ids, id=f"apply-resume-{uuid.uuid4()}", task_queue=Q_WF)
+        print(f"시작: {handle.id}")
+
+    elif cmd == "draft":
+        if len(sys.argv) < 3:
+            sys.exit("사용: worker draft <공고id>  (candidates.json에 등재된 공고만)")
+        from jobscouter.workflow import Draft
+        handle = await client.start_workflow(
+            Draft.run, sys.argv[2], id=f"draft-{sys.argv[2]}", task_queue=Q_WF)
         print(f"시작: {handle.id}")
 
     elif cmd == "status":
