@@ -297,8 +297,10 @@ _CARDS = _jenv.from_string("""
 {% else %}<div class="empty">없음</div>{% endif %}""")
 
 _LISTED = _jenv.from_string("""
-<h2>등재 공고<span class="c">{{ items|length }}</span></h2>
-<div class="notice">초안 생성은 몇 분 걸립니다 — 완료되면 이 목록에 나타납니다.</div>
+<h2>등재 공고<span class="c">{{ items|length }}{% if total > items|length %} / {{ total }}</span></h2>
+{% else %}</span></h2>{% endif %}
+<div class="notice">초안 생성은 몇 분 걸립니다 — 완료되면 이 목록에 나타납니다.
+{% if total > items|length %}등재 {{ total }}건 중 최근 {{ items|length }}건만 보여줍니다 — 그 이전 공고는 <code>worker draft &lt;공고id&gt;</code>로.{% endif %}</div>
 <div class="list">
 {% for it in items %}<div class="row plain" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
 <div style="flex:1 1 240px"><div class="pos">{{ it.title }}</div><div class="co">{{ it.company }}</div></div>
@@ -589,6 +591,9 @@ async def resume_apply(request: Request):
     return RedirectResponse("/resume/proposals", status_code=302)
 
 
+LISTED_CAP = 30   # /applications 「등재 공고」 표시 상한 — 검증(POST)은 전건 대상
+
+
 def listed_rows() -> list[dict]:
     """candidates.json 등재 행 → 표시용 dict. has = applications/{slug}(_draft) 존재 여부.
     최신 행이 위로 오게 역순(행은 등재 순서로 append되므로 뒤가 최신)."""
@@ -613,7 +618,9 @@ def applications_index():
                 mds = list(p.glob("*.md"))
                 items.append({"name": p.name, "href": f"/applications/{p.name}", "n": len(mds),
                               "date": datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d")})
-    body = _LISTED.render(items=listed_rows()) + _CARDS.render(items=items)
+    rows = listed_rows()
+    # ponytail: 등재 행은 수백 건이라 전부 그리면 페이지가 길어진다. 잘랐다는 사실은 화면에 표시한다.
+    body = _LISTED.render(items=rows[:LISTED_CAP], total=len(rows)) + _CARDS.render(items=items)
     return _render("지원서류", body, active="지원서류",
                    sub=f"{len(items)}개사. 승인한 공고는 Publish가 <b>JD·맞춤 이력서·자기소개서·면접지식맵·포트폴리오 구성</b> "
                        "5종 초안을 <code>_draft</code> 접미사로 만들어 두고, 검토는 사람이 합니다. "
