@@ -78,16 +78,16 @@ README.md      T5
 - Draft는 비동기다. 완료를 기다리지 않고 바로 리다이렉트하며, 안내 문구로
   "초안 생성은 몇 분 걸립니다 — 완료되면 이 목록에 나타납니다"를 둔다.
 
-- [ ] `_app_slug`를 `config.py`로 이동(io_acts는 import로 교체), `web.listed_rows`·`start_draft` 추가,
+- [x] `_app_slug`를 `config.py`로 이동(io_acts는 import로 교체), `web.listed_rows`·`start_draft` 추가,
       `/applications` 템플릿에 「등재 공고」 표 + `POST /applications/draft` 라우트
-- [ ] tests/test_web.py:
+- [x] tests/test_web.py:
       - `test_applications_lists_listed_rows` — repo 픽스처의 `candidates.json` rows가 표에 보인다
       - `test_draft_starts_workflow` — `start_draft` monkeypatch, `POST /applications/draft {id: "222"}`
         → 302 + 호출 인자 `["222"]`
       - `test_draft_rejects_unlisted_id` — `{id: "999"}` → 400
       - 픽스처의 `candidates.json`에 `rows`가 없으면 `repo` fixture에 추가할 것
         (현재 `proposals.json`만 있다)
-- [ ] `uv run pytest -q` 통과 → 커밋 `feat: 등재 공고 지원서류 초안 요청 버튼`
+- [x] `uv run pytest -q` 통과 → 커밋 `feat: 등재 공고 지원서류 초안 요청 버튼`
 
 ---
 
@@ -184,20 +184,20 @@ def _git_show(sha: str, rel: str) -> str:
   302 `/resume/history?key={key}`.
 - `/resume` 각 문서 섹션 제목 옆에 `이력` 링크(`/resume/history?key=...`)를 붙인다.
 
-- [ ] 구현 (config → io_acts → workflow → worker → web 순서. `apply_resume` 리팩터를 빠뜨리지 말 것)
-- [ ] tests/test_io_acts.py:
+- [x] 구현 (config → io_acts → workflow → worker → web 순서. `apply_resume` 리팩터를 빠뜨리지 말 것)
+- [x] tests/test_io_acts.py:
       - `test_resume_target_allowlist` — `factbase`·`JK.md`·`applications/foo/0_JD.md`·`drafts/x.md`는
         경로를 돌려주고, `../etc/passwd`·`applications/foo/evil.sh`·`applications/../x/0_JD.md`는 `ValueError`
       - `test_git_revert_restores_and_commits` — `tmp_path`에 `git init` → `JK.md` "v1" 커밋 →
         "v2" 커밋 → `git_revert("JK.md", <v1 sha>)` → 파일 내용이 "v1", `git log` 3커밋
         (monkeypatch: `io_acts.JOBFEED = tmp_path/"jobfeed"`, `config.JK_MD`. 원격 없으니 push 생략 경로)
       - `test_git_revert_rejects_bad_sha` — `"; rm -rf /"` → `ValueError`
-- [ ] tests/test_web.py:
+- [x] tests/test_web.py:
       - `test_history_lists_commits` — tmp git repo 픽스처에서 `/resume/history?key=JK.md` 200 + 커밋 제목
       - `test_history_rejects_bad_key` — `?key=../etc/passwd` → 400
       - `test_revert_starts_workflow` — `start_revert` monkeypatch → 302 + 인자 확인
       - `test_revert_rejects_bad_sha` — `{key: "JK.md", sha: "zzz"}` → 400
-- [ ] `uv run pytest -q` 통과 → 커밋 `feat: 이력서 수정 이력 보기·되돌리기`
+- [x] `uv run pytest -q` 통과 → 커밋 `feat: 이력서 수정 이력 보기·되돌리기`
 
 ---
 
@@ -351,8 +351,8 @@ workers = [
 await asyncio.gather(*(w.run() for w in workers))
 ```
 
-- [ ] 구현 (config → judge → io_acts → workflow → worker)
-- [ ] tests/test_io_acts.py (`monkeypatch`로 `io_acts.CHAT_DIR`를 `tmp_path/"chat"`로):
+- [x] 구현 (config → judge → io_acts → workflow → worker)
+- [x] tests/test_io_acts.py (`monkeypatch`로 `io_acts.CHAT_DIR`를 `tmp_path/"chat"`로):
       - `test_chat_load_creates_session` — 새 sid면 `doc == base_doc == 원문`, turns 빈 배열
       - `test_chat_append_applies_and_skips` — edits 3개(정상 1·원문 불일치 1·중복 인용 1) →
         `doc`에 1건만 반영, `turns[-1]["applied"] == 1`, `skipped` 2건
@@ -361,13 +361,13 @@ await asyncio.gather(*(w.run() for w in workers))
       - `test_chat_save_writes_and_archives` — 정상 경로에서 파일 내용이 `doc`이 되고
         버퍼가 `CHAT_DONE`으로 이동
       - `test_chat_load_rejects_bad_sid` — `"../../etc"` → `ValueError`
-- [ ] tests/test_workflow.py의 기존 **자격증명 격리 테스트가 그대로 통과하는지 확인**
+- [x] tests/test_workflow.py의 기존 **자격증명 격리 테스트가 그대로 통과하는지 확인**
       (`resume_chat`은 judge.py에 두므로 web·io_acts·workflow는 여전히 judge를 import하지 않는다).
       실패하면 import 경로를 잘못 넣은 것이다 — 테스트를 고치지 말고 코드를 고칠 것
-- [ ] tests/test_judge.py: `test_resume_chat_returns_reply_and_edits` —
+- [x] tests/test_judge.py: `test_resume_chat_returns_reply_and_edits` —
       `judge._claude`를 monkeypatch해 `{"structured_output": {"edits": [...], "reply": "..."}}`
       반환 → `resume_chat`이 그대로 dict로 넘기는지 + system 프롬프트에 사실베이스가 실렸는지
-- [ ] `uv run pytest -q` 통과 → 커밋 `feat: 이력서 채팅 백엔드 — 세션 버퍼·턴·저장`
+- [x] `uv run pytest -q` 통과 → 커밋 `feat: 이력서 채팅 백엔드 — 세션 버퍼·턴·저장`
 
 ---
 
@@ -408,8 +408,8 @@ web 신규 import: `difflib`, `config.CHAT_DIR`, `config.SID_RE`, `workflow.Resu
   지연이 거슬리면 워크플로를 시작만 하고 페이지에서 폴링으로 바꾼다.
 - CSP가 인라인 스크립트를 막는다. JS 없이 폼 제출만으로 동작해야 한다.
 
-- [ ] 구현
-- [ ] tests/test_web.py (`monkeypatch`로 `web.CHAT_DIR`를 tmp로):
+- [x] 구현
+- [x] tests/test_web.py (`monkeypatch`로 `web.CHAT_DIR`를 tmp로):
       - `test_chat_new_session_redirects` — `GET /resume/chat?key=JK.md` → 302,
         location이 `/resume/chat/<12자리 hex>?key=JK.md`
       - `test_chat_rejects_bad_key` — `?key=../etc/passwd` → 400
@@ -418,7 +418,7 @@ web 신규 import: `difflib`, `config.CHAT_DIR`, `config.SID_RE`, `workflow.Resu
         대화 텍스트·`applied` 배지·diff의 `+` 줄이 보인다
       - `test_chat_post_starts_workflow` — `start_resume_chat` monkeypatch → 302 + 인자 확인
       - `test_chat_end_save_and_discard` — `end_chat` monkeypatch, `save=1`/`save=0` 각각 인자 확인
-- [ ] `uv run pytest -q` 통과 → 커밋 `feat: 이력서 채팅 화면`
+- [x] `uv run pytest -q` 통과 → 커밋 `feat: 이력서 채팅 화면`
 
 ---
 
@@ -426,7 +426,7 @@ web 신규 import: `difflib`, `config.CHAT_DIR`, `config.SID_RE`, `workflow.Resu
 
 **Files:** `README.md` (`deploy/SERVER_SETUP.md`·`compose.yaml`은 변경 없음 — 버퍼가 이미 마운트된 경로 안이라서)
 
-- [ ] README 라우트 표에 추가: `/resume/chat` (대화로 이력서 수정 — 세션 버퍼, 저장 시 커밋),
+- [x] README 라우트 표에 추가: `/resume/chat` (대화로 이력서 수정 — 세션 버퍼, 저장 시 커밋),
       `/resume/history` (수정 이력·되돌리기), `/applications`에 등재 공고 초안 요청 버튼.
       큐 설명에 `Q_CHAT` 한 줄(판정 레이트리밋과 분리된 대화 큐).
 - [ ] 서버 배포: 코드 갱신 후 `docker compose -f deploy/compose.yaml up -d --build io llm web`.
@@ -439,4 +439,4 @@ web 신규 import: `difflib`, `config.CHAT_DIR`, `config.SID_RE`, `workflow.Resu
       새 커밋이 쌓이고 내용이 복원되는지 확인
 - [ ] 라이브 4: 저장 충돌 — 채팅 세션을 연 채 `worker apply-resume`나 직접 편집으로 같은 파일을
       바꾼 뒤 `저장` → 거부 메시지가 뜨는지
-- [ ] 커밋 `docs: v3 이력서 채팅·이력 운영 문서`
+- [x] 커밋 `docs: v3 이력서 채팅·이력 운영 문서`
