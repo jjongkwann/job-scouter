@@ -18,11 +18,15 @@ DailyScan (workflow, 매일 자동)                Publish (workflow, 웹 승인
 승인·거부는 `web`(FastAPI, :8090)이 `proposals.json`을 보여주고 버튼으로
 `Publish`를 시작한다 — 파일을 직접 고치는 경로는 없다.
 
-큐 3개는 자격증명 격리 경계다. judge·report는 Claude Code headless(`claude -p`,
-구독 인증 — 로그인된 CLI 또는 `CLAUDE_CODE_OAUTH_TOKEN`)로 돌고, 이 실행 경계는
-llm 워커의 `judge.py`에만 있다 — io·workflow·web 모듈은 judge를 import하지 않는다
-(테스트로 강제). API 키 불필요. 호출당 지출 상한은 `JudgeInput.max_usd`
-(`ScanParams.max_usd`, `--budget`).
+큐 4개는 자격증명 격리 경계다. judge·report·초안·이력서 채팅은 Claude Code
+headless(`claude -p`, 구독 인증 — 로그인된 CLI 또는 `CLAUDE_CODE_OAUTH_TOKEN`)로 돌고,
+이 실행 경계는 llm 워커의 `judge.py`에만 있다 — io·workflow·web 모듈은 judge를
+import하지 않는다(테스트로 강제). API 키 불필요. 호출당 지출 상한은
+`JudgeInput.max_usd`(`ScanParams.max_usd`, `--budget`).
+
+`jobscout-llm`에는 큐 레벨 레이트리밋(0.5/s)이 걸려 있다. 이력서 채팅은 사람이 화면
+앞에서 기다리는 대화라 판정 뒤에 줄 서면 안 되므로 `jobscout-chat` 큐를 따로 쓴다 —
+같은 llm 워커 프로세스가 둘 다 돌리고, 채팅 큐에만 리밋이 없다.
 
 ## 설정
 
@@ -63,8 +67,10 @@ uv run uvicorn jobscouter.web:app --host 0.0.0.0 --port 8090   # 터미널 3 —
 | `/candidates` | `build.py` 산출 `후보목록.html` 그대로 |
 | `/reports`, `/reports/{name}` | 사이클 보고서 목록·렌더 |
 | `/resume/proposals` | 이력서 갱신 제안 승인 → ApplyResume |
-| `/resume` | `JK.md`·사실베이스·`drafts/` 렌더 |
-| `/applications`, `/applications/{slug}` | 회사별 지원서류 5종 렌더 |
+| `/resume` | `JK.md`·사실베이스·`drafts/` 렌더. 문서별 「대화로 고치기」·「이력」 링크, 진행 중 대화 목록 |
+| `/resume/chat`, `/resume/chat/{sid}` | 대화로 이력서 수정. 한 턴 = `ResumeChat` 워크플로 1회. 수정은 세션 버퍼에만 쌓이고 `저장`을 눌러야 파일 반영 + 커밋 1개(`EndChat`) |
+| `/resume/history` | 문서별 커밋 목록·diff. 「되돌리기」는 과거 내용을 **새 커밋으로** 올린다(`RevertFile`) — 히스토리를 지우지 않으므로 되돌린 것도 되돌릴 수 있다 |
+| `/applications`, `/applications/{slug}` | 회사별 지원서류 5종 렌더. 등재 공고에서 초안 (재)생성 요청 → `Draft` |
 | `/docs`, `/docs/{path}` | `references/` 문서 렌더(하위 디렉토리 포함) |
 
 워커가 꺼져 있어도 워크플로는 서버에서 대기하고, 워커를 켜면 이어진다.
