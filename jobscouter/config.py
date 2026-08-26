@@ -19,6 +19,7 @@ DATA = ROOT / "data"
 # jobfeed 스크립트 인터프리터 — certifi가 있는 파이썬이어야 원티드 API가 붙는다
 PY = _env("JOBSCOUTER_PY", sys.executable)
 Q_WF, Q_IO, Q_LLM = "jobscout-wf", "jobscout-io", "jobscout-llm"
+Q_CHAT = "jobscout-chat"                       # 판정 레이트리밋과 분리 — 채팅이 판정 뒤에 안 밀리게
 JUDGE_MODEL = _env("JOBSCOUTER_MODEL", "claude-sonnet-5")
 PROPOSALS = "proposals.json"   # JOBFEED 아래 — 판정됐지만 등재/거부 전인 후보
 RESUME_PROPOSALS = "resume_proposals.json"   # JOBFEED 아래 — ResumeSync 제안, 사람 승인 대기
@@ -44,6 +45,9 @@ REFERENCES = JOBFEED.parent / "references"
 DRAFTS = JOBFEED.parent / "drafts"
 APPLICATIONS = JOBFEED.parent / "applications"
 APP_EXAMPLE = _env("JOBSCOUTER_APP_EXAMPLE", "example")   # 형식 앵커 — applications/ 아래 회사 폴더명
+CHAT_DIR = JOBFEED.parent / "tmp" / "chat"     # 데이터 repo .gitignore의 tmp/ 아래 — 커밋 안 됨
+CHAT_DONE = CHAT_DIR / "done"
+SID_RE = re.compile(r"[0-9a-f]{8,32}")
 
 
 def _norm(s: str) -> str:

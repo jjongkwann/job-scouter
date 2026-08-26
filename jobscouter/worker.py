@@ -42,8 +42,8 @@ async def main() -> None:
 
     if cmd == "io":
         from jobscouter import io_acts, search
-        from jobscouter.workflow import (ApplyResume, DailyScan, Draft, Publish,
-                                         ResumeSync, RevertFile)
+        from jobscouter.workflow import (ApplyResume, DailyScan, Draft, EndChat, Publish,
+                                         ResumeChat, ResumeSync, RevertFile)
         acts = [io_acts.run_script, io_acts.load_targets,
                 io_acts.fetch_requirements, io_acts.commit_rows,
                 io_acts.sync_repo, io_acts.save_proposals,
@@ -52,11 +52,13 @@ async def main() -> None:
                 io_acts.write_application, search.search_context,
                 io_acts.pkb_snapshot, io_acts.resume_state_hash,
                 io_acts.save_resume_proposals, io_acts.apply_resume,
-                io_acts.reindex_facts, io_acts.git_revert]
+                io_acts.reindex_facts, io_acts.git_revert,
+                io_acts.chat_load, io_acts.chat_append, io_acts.chat_save, io_acts.chat_discard]
         ex = ThreadPoolExecutor(4)
         workers = [
             Worker(client, task_queue=Q_WF,
-                   workflows=[DailyScan, Publish, ResumeSync, ApplyResume, Draft, RevertFile]),
+                   workflows=[DailyScan, Publish, ResumeSync, ApplyResume, Draft,
+                             RevertFile, ResumeChat, EndChat]),
             Worker(client, task_queue=Q_IO, activities=acts, activity_executor=ex),
         ]
         print(f"io 워커 시작 — {TEMPORAL} / {Q_WF}, {Q_IO}")
@@ -125,15 +127,19 @@ async def main() -> None:
         from jobscouter import judge as judge_mod
         if not shutil.which(judge_mod.CLAUDE):
             sys.exit(f"'{judge_mod.CLAUDE}' 없음 — Claude Code 설치·로그인(또는 CLAUDE_CODE_OAUTH_TOKEN) 필요")
-        from jobscouter.config import Q_LLM
-        worker = Worker(
-            client, task_queue=Q_LLM,
-            activities=[judge_mod.judge, judge_mod.report, judge_mod.draft_application,
-                       judge_mod.propose_resume_update],
-            activity_executor=ThreadPoolExecutor(2),
-            max_task_queue_activities_per_second=0.5)  # 레이트리밋은 큐 레벨
-        print(f"llm 워커 시작 — {TEMPORAL} / {Q_LLM}")
-        await worker.run()
+        from jobscouter.config import Q_CHAT, Q_LLM
+        workers = [
+            Worker(client, task_queue=Q_LLM,
+                   activities=[judge_mod.judge, judge_mod.report, judge_mod.draft_application,
+                              judge_mod.propose_resume_update],
+                   activity_executor=ThreadPoolExecutor(2),
+                   max_task_queue_activities_per_second=0.5),  # 레이트리밋은 큐 레벨
+            # 채팅은 사람이 기다리는 대화라 판정 레이트리밋을 걸지 않는다
+            Worker(client, task_queue=Q_CHAT, activities=[judge_mod.resume_chat],
+                   activity_executor=ThreadPoolExecutor(2)),
+        ]
+        print(f"llm 워커 시작 — {TEMPORAL} / {Q_LLM}, {Q_CHAT}")
+        await asyncio.gather(*(w.run() for w in workers))
 
     elif cmd == "schedule":
         from temporalio.service import RPCError

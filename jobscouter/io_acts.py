@@ -9,9 +9,9 @@ from datetime import date
 
 from temporalio import activity
 
-from jobscouter.config import (APP_FILES, APPLICATIONS, JOBFEED,
+from jobscouter.config import (APP_FILES, APPLICATIONS, CHAT_DIR, CHAT_DONE, JOBFEED,
                                 PKB_CATEGORIES, PKB_INDEX, PKB_STATUSES, PROPOSALS, PY,
-                                RESUME_PROPOSALS, Target, _app_slug, _norm, resume_target)
+                                RESUME_PROPOSALS, SID_RE, Target, _app_slug, _norm, resume_target)
 from jobscouter.search import es
 
 
@@ -460,6 +460,86 @@ def git_revert(key: str, sha: str) -> str:
         raise RuntimeError(f"git show 실패\n{r.stderr}")
     path.write_text(r.stdout)
     return _commit_and_push([rel], f"resume: {rel} → {sha[:7]} 되돌리기")
+
+
+def _chat_path(sid: str):
+    """sid를 검증한 뒤 버퍼 경로로. chat_* activity 4개가 공유 — sid가 경로가 되는 유일한 지점."""
+    if not SID_RE.fullmatch(sid):
+        raise ValueError(f"잘못된 sid 형식: {sid}")
+    return CHAT_DIR / f"{sid}.json"
+
+
+@activity.defn
+def chat_load(sid: str, key: str) -> dict:
+    """세션 버퍼를 읽는다. 없으면 key 대상 원문으로 새로 만든다."""
+    path = _chat_path(sid)
+    if path.exists():
+        return json.loads(path.read_text())
+    target = resume_target(key)
+    if not target.exists():
+        raise ValueError(f"알 수 없는 대상: {key}")
+    doc = target.read_text()
+    session = {
+        "sid": sid, "target": key,
+        "base_sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+        "base_doc": doc, "doc": doc, "turns": [],
+        "created": date.today().isoformat(),
+    }
+    CHAT_DIR.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(session, ensure_ascii=False, indent=1))
+    return session
+
+
+@activity.defn
+def chat_append(sid: str, message: str, out: dict) -> dict:
+    """LLM 출력(out={"reply","edits"})을 버퍼 doc에 적용하고 turns에 쌓는다. 갱신된 세션 반환.
+    current가 문서에 정확히 한 번 나올 때만 치환 — 빈 인용·원문 불일치·중복 인용은
+    건너뛰고 skipped에 사유를 남긴다(str.replace를 무조건 쓰면 엉뚱한 곳을 고친다)."""
+    path = _chat_path(sid)
+    s = json.loads(path.read_text())
+    doc = s["doc"]
+    applied, skipped = 0, []
+    for e in out["edits"]:
+        current, proposed, why = e["current"], e["proposed"], e["why"]
+        n = doc.count(current)
+        if not current:
+            skipped.append(f"빈 인용 — 건너뜀: {why}")
+        elif n == 0:
+            skipped.append(f"원문 불일치 — 건너뜀: {current[:40]}…")
+        elif n > 1:
+            skipped.append(f"인용이 {n}곳에 중복 — 건너뜀: {current[:40]}…")
+        else:
+            doc = doc.replace(current, proposed, 1)
+            applied += 1
+    s["doc"] = doc
+    s["turns"].append({"role": "user", "text": message})
+    s["turns"].append({"role": "assistant", "text": out["reply"],
+                        "applied": applied, "skipped": skipped})
+    path.write_text(json.dumps(s, ensure_ascii=False, indent=1))
+    return s
+
+
+@activity.defn
+def chat_save(sid: str) -> str:
+    """base_sha256이 현재 파일 해시와 같을 때만 doc를 쓰고 commit+push. 버퍼는 done/으로."""
+    path = _chat_path(sid)
+    s = json.loads(path.read_text())
+    target = resume_target(s["target"])
+    if hashlib.sha256(target.read_bytes()).hexdigest() != s["base_sha256"]:
+        raise RuntimeError("대상 파일이 세션 시작 후 바뀌었습니다 — 저장 취소")
+    target.write_text(s["doc"])
+    rel = str(target.relative_to(JOBFEED.parent))
+    msg = _commit_and_push([rel], f"resume: {rel} 채팅 수정 {len(s['turns']) // 2}턴")
+    CHAT_DONE.mkdir(parents=True, exist_ok=True)
+    path.rename(CHAT_DONE / f"{sid}.json")
+    return msg
+
+
+@activity.defn
+def chat_discard(sid: str) -> str:
+    """버퍼 삭제. 커밋 없음."""
+    _chat_path(sid).unlink(missing_ok=True)
+    return "버림"
 
 
 @activity.defn

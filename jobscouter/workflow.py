@@ -5,7 +5,7 @@ from datetime import timedelta
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
-from jobscouter.config import Q_IO, Q_LLM, PublishParams, ScanParams
+from jobscouter.config import Q_CHAT, Q_IO, Q_LLM, PublishParams, ScanParams
 
 _IO_OPTS = dict(
     task_queue=Q_IO,
@@ -18,6 +18,11 @@ _LLM_OPTS = dict(
     retry_policy=RetryPolicy(maximum_attempts=3),
 )
 _DRAFT_OPTS = {**_LLM_OPTS, "start_to_close_timeout": timedelta(minutes=15)}
+_CHAT_OPTS = dict(
+    task_queue=Q_CHAT,
+    start_to_close_timeout=timedelta(minutes=6),
+    retry_policy=RetryPolicy(maximum_attempts=2),
+)
 
 
 async def _draft(target: dict) -> str:
@@ -227,6 +232,32 @@ class ResumeSync:
 
         self._stage = "완료"
         return {"changed": True, "docs": snap["docs"], "proposals": n}
+
+
+@workflow.defn
+class ResumeChat:
+    """이력서 편집 대화 한 턴. 웹이 결과를 기다린다."""
+
+    @workflow.run
+    async def run(self, inp: dict) -> dict:      # {"sid","key","message"}
+        s = await workflow.execute_activity(
+            "chat_load", args=[inp["sid"], inp["key"]], **_IO_OPTS)
+        out = await workflow.execute_activity(
+            "resume_chat", args=[s["doc"], s["turns"], inp["message"]], **_CHAT_OPTS)
+        return await workflow.execute_activity(
+            "chat_append", args=[inp["sid"], inp["message"], out], **_IO_OPTS)
+
+
+@workflow.defn
+class EndChat:
+    """저장 또는 버림. 저장은 sync_repo 후 해시 게이트를 거친다."""
+
+    @workflow.run
+    async def run(self, inp: dict) -> str:       # {"sid","save": bool}
+        if not inp["save"]:
+            return await workflow.execute_activity("chat_discard", inp["sid"], **_IO_OPTS)
+        await workflow.execute_activity("sync_repo", **_IO_OPTS)
+        return await workflow.execute_activity("chat_save", inp["sid"], **_IO_OPTS)
 
 
 @workflow.defn

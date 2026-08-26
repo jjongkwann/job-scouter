@@ -465,3 +465,77 @@ def test_listed_target_from_candidates(tmp_path, monkeypatch):
     assert io_acts.listed_target("j54736975")["url"] == "https://jumpit.saramin.co.kr/position/54736975"
     with pytest.raises(ValueError):
         io_acts.listed_target("999")
+
+
+def test_chat_load_creates_session(tmp_path, monkeypatch):
+    monkeypatch.setattr(io_acts, "CHAT_DIR", tmp_path / "chat")
+    jk = tmp_path / "JK.md"
+    jk.write_text("원문 내용")
+    monkeypatch.setattr(config, "JK_MD", jk)
+
+    sid = "a" * 12
+    s = io_acts.chat_load(sid, "JK.md")
+    assert s["doc"] == s["base_doc"] == "원문 내용"
+    assert s["turns"] == []
+    assert (tmp_path / "chat" / f"{sid}.json").exists()   # 디스크에 남아 탭을 닫아도 살아남는다
+
+
+def test_chat_load_rejects_bad_sid(tmp_path, monkeypatch):
+    monkeypatch.setattr(io_acts, "CHAT_DIR", tmp_path / "chat")
+    with pytest.raises(ValueError):
+        io_acts.chat_load("../../etc", "JK.md")
+
+
+def test_chat_append_applies_and_skips(tmp_path, monkeypatch):
+    monkeypatch.setattr(io_acts, "CHAT_DIR", tmp_path / "chat")
+    jk = tmp_path / "JK.md"
+    jk.write_text("문장 하나. 문장 둘. 문장 둘.")
+    monkeypatch.setattr(config, "JK_MD", jk)
+    sid = "b" * 12
+    io_acts.chat_load(sid, "JK.md")
+
+    out = {"reply": "답변", "edits": [
+        {"current": "문장 하나", "proposed": "문장 하나 수정", "why": "정상"},
+        {"current": "없는 문장", "proposed": "x", "why": "불일치"},
+        {"current": "문장 둘", "proposed": "y", "why": "중복 인용"},   # 2번 나타남 → 건너뜀
+    ]}
+    s = io_acts.chat_append(sid, "메시지", out)
+    assert "문장 하나 수정" in s["doc"] and s["doc"].count("문장 둘") == 2   # 중복 인용은 그대로
+    assert s["turns"][-1]["applied"] == 1
+    assert len(s["turns"][-1]["skipped"]) == 2
+    assert s["turns"][0] == {"role": "user", "text": "메시지"}
+
+
+def test_chat_save_rejects_changed_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(io_acts, "CHAT_DIR", tmp_path / "chat")
+    jk = tmp_path / "JK.md"
+    jk.write_text("원문")
+    monkeypatch.setattr(config, "JK_MD", jk)
+    sid = "c" * 12
+    io_acts.chat_load(sid, "JK.md")
+
+    jk.write_text("세션 시작 후 밖에서 고쳐짐")   # ResumeSync·apply_resume 등이 중간에 건드린 상황
+    with pytest.raises(RuntimeError):
+        io_acts.chat_save(sid)
+
+
+def test_chat_save_writes_and_archives(tmp_path, monkeypatch):
+    _init_repo(tmp_path)
+    jobfeed = tmp_path / "jobfeed"
+    jobfeed.mkdir()
+    monkeypatch.setattr(io_acts, "JOBFEED", jobfeed)
+    monkeypatch.setattr(io_acts, "CHAT_DIR", tmp_path / "chat")
+    monkeypatch.setattr(io_acts, "CHAT_DONE", tmp_path / "chat" / "done")
+    jk = tmp_path / "JK.md"
+    jk.write_text("원문")
+    monkeypatch.setattr(config, "JK_MD", jk)
+    sid = "d" * 12
+    io_acts.chat_load(sid, "JK.md")
+    out = {"reply": "답변", "edits": [{"current": "원문", "proposed": "수정본", "why": "why"}]}
+    io_acts.chat_append(sid, "메시지", out)
+
+    io_acts.chat_save(sid)
+
+    assert jk.read_text() == "수정본"
+    assert not (tmp_path / "chat" / f"{sid}.json").exists()
+    assert (tmp_path / "chat" / "done" / f"{sid}.json").exists()

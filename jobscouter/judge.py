@@ -70,6 +70,28 @@ RESUME_SCHEMA = {
     "required": ["proposals"],
 }
 
+# reply(사용자에게 보일 자유 텍스트)가 가장 긴 필드라 SCORE_SCHEMA와 같은 이유로 맨 끝에 둔다.
+CHAT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "edits": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "current": {"type": "string",
+                                "description": "고칠 원문을 문서에서 그대로 인용. 문서에 정확히 한 번만 나오는 만큼 길게"},
+                    "proposed": {"type": "string", "description": "대체할 내용. 삭제면 빈 문자열"},
+                    "why": {"type": "string", "description": "이 수정을 하는 이유 한 문장"},
+                },
+                "required": ["current", "proposed", "why"],
+            },
+        },
+        "reply": {"type": "string", "description": "사용자에게 보일 답변"},
+    },
+    "required": ["edits", "reply"],
+}
+
 
 def factbase_hash() -> str:
     return hashlib.sha256(FACTBASE.read_bytes()).hexdigest()[:12]
@@ -218,6 +240,27 @@ def propose_resume_update(snapshot_text: str) -> list[dict]:
               "반영할 변경이 없으면 빈 목록을 반환하라.")
     d = _claude(prompt, system, max_usd=1.0, schema=RESUME_SCHEMA)
     return list(d["structured_output"]["proposals"])
+
+
+@activity.defn
+def resume_chat(doc: str, turns: list[dict], message: str) -> dict:
+    """이력서 편집 대화 한 턴. 문서 전문을 되받지 않고 current→proposed 치환 목록만 받는다.
+    system은 세션 내 불변(사실베이스+규칙)이라 프롬프트 캐시가 먹는다."""
+    system = (
+        f"<사실베이스>\n{FACTBASE.read_text()}\n</사실베이스>\n\n"
+        "너는 이력서 편집 조수다. 사실베이스에 없는 주장은 절대 만들지 않는다. "
+        "수정은 `edits`로만 낸다. `current`는 문서에 정확히 한 번 나오도록 충분히 길게 "
+        "인용한다. 내용을 새로 넣을 때도 인접한 기존 문장을 `current`로 인용하고 "
+        "`proposed`에 그 문장 + 새 내용을 함께 쓴다. 고칠 게 없으면 `edits`를 빈 배열로 "
+        "두고 `reply`만 쓴다."
+    )
+    convo = "\n".join(
+        f"[사용자] {t['text']}" if t["role"] == "user" else f"[조수] {t['text']}"
+        for t in turns)
+    prompt = (f"<현재 문서>\n{doc}\n</현재 문서>\n\n<대화>\n{convo}\n</대화>\n\n{message}")
+    d = _claude(prompt, system, max_usd=0.5, schema=CHAT_SCHEMA, timeout=300)
+    out = d["structured_output"]
+    return {"reply": out["reply"], "edits": list(out["edits"])}
 
 
 @activity.defn

@@ -120,3 +120,26 @@ def test_propose_resume_update_reads_factbase_and_jk_and_uses_schema(tmp_path, m
     assert "PKB 발췌 텍스트" in prompt
     assert schema is J.RESUME_SCHEMA
     assert "id" not in out[0]   # id는 io_acts가 부여
+
+
+def test_resume_chat_returns_reply_and_edits(tmp_path, monkeypatch):
+    monkeypatch.setattr(J, "FACTBASE", tmp_path / "facts.md")
+    (tmp_path / "facts.md").write_text("사실베이스 내용")
+    called = []
+
+    def fake_claude(prompt, system, max_usd, schema=None, timeout=240):
+        called.append((prompt, system, max_usd, schema, timeout))
+        return {"structured_output": {
+            "edits": [{"current": "a", "proposed": "b", "why": "c"}],
+            "reply": "답변입니다"}}
+
+    monkeypatch.setattr(J, "_claude", fake_claude)
+    turns = [{"role": "user", "text": "이전 메시지"}, {"role": "assistant", "text": "이전 답변"}]
+    out = J.resume_chat("문서 원문", turns, "새 메시지")
+
+    assert out == {"reply": "답변입니다",
+                   "edits": [{"current": "a", "proposed": "b", "why": "c"}]}
+    prompt, system, max_usd, schema, timeout = called[0]
+    assert "사실베이스 내용" in system   # 사실베이스가 system에 실림
+    assert schema is J.CHAT_SCHEMA
+    assert "문서 원문" in prompt and "이전 메시지" in prompt and "새 메시지" in prompt
