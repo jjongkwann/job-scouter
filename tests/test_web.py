@@ -1,9 +1,11 @@
 import json
+import subprocess
 
 import pytest
 from fastapi.testclient import TestClient
 
 import jobscouter.web as web
+from jobscouter import config
 
 
 @pytest.fixture
@@ -220,5 +222,53 @@ def test_draft_rejects_unlisted_id(client, monkeypatch):
     calls = []
     monkeypatch.setattr(web, "start_draft", lambda cid: calls.append(cid))
     r = client.post("/applications/draft", data={"id": "999"})
+    assert r.status_code == 400
+    assert calls == []
+
+
+def _init_git(repo):
+    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True)
+
+
+def test_history_lists_commits(client, repo, monkeypatch):
+    """resume_target()은 config 모듈 전역을 보므로 web.JK_MD가 아니라 config.JK_MD를 건다."""
+    _init_git(repo)
+    monkeypatch.setattr(config, "JK_MD", repo / "JK.md")
+    subprocess.run(["git", "-C", str(repo), "add", "JK.md"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-m", "이력서 초안"],
+                   check=True, capture_output=True)
+
+    r = client.get("/resume/history?key=JK.md")
+    assert r.status_code == 200
+    assert "이력서 초안" in r.text
+
+
+def test_history_rejects_bad_key(client):
+    r = client.get("/resume/history?key=../etc/passwd")
+    assert r.status_code == 400
+
+
+def test_revert_starts_workflow(client, monkeypatch):
+    calls = []
+
+    async def fake_start_revert(key, sha):
+        calls.append((key, sha))
+        return "revert-test"
+
+    monkeypatch.setattr(web, "start_revert", fake_start_revert)
+    r = client.post("/resume/revert", data={"key": "JK.md", "sha": "abc1234"},
+                    follow_redirects=False)
+
+    assert r.status_code == 302
+    assert r.headers["location"] == "/resume/history?key=JK.md"
+    assert calls == [("JK.md", "abc1234")]
+
+
+def test_revert_rejects_bad_sha(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(web, "start_revert", lambda key, sha: calls.append((key, sha)))
+    r = client.post("/resume/revert", data={"key": "JK.md", "sha": "zzz"})
     assert r.status_code == 400
     assert calls == []

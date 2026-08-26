@@ -1,6 +1,7 @@
 """io 큐 activity — 자격증명 없음. jobfeed 스크립트 subprocess + 공개 API."""
 import hashlib
 import json
+import re
 import ssl
 import subprocess
 import urllib.request
@@ -8,9 +9,9 @@ from datetime import date
 
 from temporalio import activity
 
-from jobscouter.config import (APP_FILES, APPLICATIONS, FACTBASE, JK_MD, JOBFEED,
+from jobscouter.config import (APP_FILES, APPLICATIONS, JOBFEED,
                                 PKB_CATEGORIES, PKB_INDEX, PKB_STATUSES, PROPOSALS, PY,
-                                RESUME_PROPOSALS, Target, _app_slug, _norm)
+                                RESUME_PROPOSALS, Target, _app_slug, _norm, resume_target)
 from jobscouter.search import es
 
 
@@ -384,9 +385,6 @@ def save_resume_proposals(items: list[dict], hash: str) -> int:
     return len(items)
 
 
-_RESUME_TARGETS = {"factbase": FACTBASE, "JK.md": JK_MD}
-
-
 @activity.defn
 def apply_resume(ids: list[str]) -> str:
     """승인 항목을 사실베이스·JK.md에 반영. change=current를 proposed로 정확 치환,
@@ -403,8 +401,12 @@ def apply_resume(ids: list[str]) -> str:
         if not it:
             failed.append(f"{pid}: 제안 없음")
             continue
-        target = _RESUME_TARGETS.get(it["target"])
-        if target is None or not target.exists():
+        try:
+            target = resume_target(it["target"])
+        except ValueError:
+            failed.append(f"{pid}: 알 수 없는 대상 {it['target']}")
+            continue
+        if not target.exists():
             failed.append(f"{pid}: 알 수 없는 대상 {it['target']}")
             continue
         text = target.read_text()
@@ -429,7 +431,8 @@ def apply_resume(ids: list[str]) -> str:
 
     remaining = [it for it in items if it["id"] not in applied]
     path.write_text(json.dumps({**data, "items": remaining}, ensure_ascii=False, indent=1))
-    paths = [str(p.relative_to(JOBFEED.parent)) for p in set(_RESUME_TARGETS.values())] \
+    paths = [str(p.relative_to(JOBFEED.parent))
+             for p in {resume_target("factbase"), resume_target("JK.md")}] \
         + [f"jobfeed/{RESUME_PROPOSALS}"]
     _commit_and_push(paths, f"resume: 자동 제안 반영 {len(applied)}건")
 
@@ -437,6 +440,26 @@ def apply_resume(ids: list[str]) -> str:
     if failed:
         msg += " · 실패: " + "; ".join(failed)
     return msg
+
+
+_SHA = re.compile(r"[0-9a-f]{7,40}")
+
+
+@activity.defn
+def git_revert(key: str, sha: str) -> str:
+    """git show {sha}:{경로} 내용을 파일에 되쓰고 commit+push. 히스토리는 지우지 않으므로
+    되돌린 것도 다시 되돌릴 수 있다. sha는 subprocess 인자로 들어가므로 형식 검증 필수."""
+    if not _SHA.fullmatch(sha):
+        raise ValueError(f"잘못된 sha 형식: {sha}")
+    path = resume_target(key)
+    rel = str(path.relative_to(JOBFEED.parent))  # 정상 배치에서는 FACTBASE도 이 안쪽 — 밖이면 ValueError
+    repo = str(JOBFEED.parent)
+    r = subprocess.run(["git", "-C", repo, "show", f"{sha}:{rel}"],
+                       capture_output=True, text=True, timeout=20)
+    if r.returncode != 0:
+        raise RuntimeError(f"git show 실패\n{r.stderr}")
+    path.write_text(r.stdout)
+    return _commit_and_push([rel], f"resume: {rel} → {sha[:7]} 되돌리기")
 
 
 @activity.defn

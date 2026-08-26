@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 import jobscouter.io_acts as io_acts
+from jobscouter import config
 from jobscouter.config import Target
 
 
@@ -360,9 +361,9 @@ def test_apply_resume_change_add_remove_and_reports_failures(tmp_path, monkeypat
                         "## 자격증\n\n정보처리기사\n")
     jk = tmp_path / "JK.md"
     jk.write_text("# JK\n\n소개\n")
-    monkeypatch.setattr(io_acts, "FACTBASE", factbase)
-    monkeypatch.setattr(io_acts, "JK_MD", jk)
-    monkeypatch.setattr(io_acts, "_RESUME_TARGETS", {"factbase": factbase, "JK.md": jk})
+    # resume_target()이 config 모듈 전역을 참조하므로 patch도 거기에 건다(io_acts가 아니라)
+    monkeypatch.setattr(config, "FACTBASE", factbase)
+    monkeypatch.setattr(config, "JK_MD", jk)
 
     items = [
         {"id": "id-change", "target": "factbase", "section": "경력", "kind": "change",
@@ -392,6 +393,55 @@ def test_apply_resume_change_add_remove_and_reports_failures(tmp_path, monkeypat
 
     remaining = json.loads((jobfeed / "resume_proposals.json").read_text())["items"]
     assert {it["id"] for it in remaining} == {"id-mismatch"}   # 반영분만 제거됨
+
+
+def test_resume_target_allowlist(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "FACTBASE", tmp_path / "facts.md")
+    monkeypatch.setattr(config, "JK_MD", tmp_path / "JK.md")
+    monkeypatch.setattr(config, "APPLICATIONS", tmp_path / "applications")
+    monkeypatch.setattr(config, "DRAFTS", tmp_path / "drafts")
+
+    assert config.resume_target("factbase") == tmp_path / "facts.md"
+    assert config.resume_target("JK.md") == tmp_path / "JK.md"
+    assert config.resume_target("applications/foo/0_JD.md") == \
+        tmp_path / "applications" / "foo" / "0_JD.md"
+    assert config.resume_target("drafts/x.md") == tmp_path / "drafts" / "x.md"
+
+    for bad in ("../etc/passwd", "applications/foo/evil.sh", "applications/../x/0_JD.md"):
+        with pytest.raises(ValueError):
+            config.resume_target(bad)
+
+
+def test_git_revert_restores_and_commits(tmp_path, monkeypatch):
+    _init_repo(tmp_path)
+    jobfeed = tmp_path / "jobfeed"
+    jobfeed.mkdir()
+    jk = tmp_path / "JK.md"
+    jk.write_text("v1")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "JK.md"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "v1"],
+                   check=True, capture_output=True)
+    v1_sha = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                            capture_output=True, text=True).stdout.strip()
+    jk.write_text("v2")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "JK.md"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "v2"],
+                   check=True, capture_output=True)
+
+    monkeypatch.setattr(io_acts, "JOBFEED", jobfeed)
+    monkeypatch.setattr(config, "JK_MD", jk)
+
+    io_acts.git_revert("JK.md", v1_sha)
+
+    assert jk.read_text() == "v1"
+    log = subprocess.run(["git", "-C", str(tmp_path), "log", "--oneline"],
+                         capture_output=True, text=True).stdout
+    assert log.count("\n") == 3   # v1 + v2 + 되돌리기 커밋 (원격 없어 push는 생략)
+
+
+def test_git_revert_rejects_bad_sha():
+    with pytest.raises(ValueError):
+        io_acts.git_revert("JK.md", "; rm -rf /")
 
 
 def test_reindex_facts_delegates_to_index_es(monkeypatch):

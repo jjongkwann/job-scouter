@@ -42,7 +42,8 @@ async def main() -> None:
 
     if cmd == "io":
         from jobscouter import io_acts, search
-        from jobscouter.workflow import ApplyResume, DailyScan, Draft, Publish, ResumeSync
+        from jobscouter.workflow import (ApplyResume, DailyScan, Draft, Publish,
+                                         ResumeSync, RevertFile)
         acts = [io_acts.run_script, io_acts.load_targets,
                 io_acts.fetch_requirements, io_acts.commit_rows,
                 io_acts.sync_repo, io_acts.save_proposals,
@@ -51,11 +52,11 @@ async def main() -> None:
                 io_acts.write_application, search.search_context,
                 io_acts.pkb_snapshot, io_acts.resume_state_hash,
                 io_acts.save_resume_proposals, io_acts.apply_resume,
-                io_acts.reindex_facts]
+                io_acts.reindex_facts, io_acts.git_revert]
         ex = ThreadPoolExecutor(4)
         workers = [
             Worker(client, task_queue=Q_WF,
-                   workflows=[DailyScan, Publish, ResumeSync, ApplyResume, Draft]),
+                   workflows=[DailyScan, Publish, ResumeSync, ApplyResume, Draft, RevertFile]),
             Worker(client, task_queue=Q_IO, activities=acts, activity_executor=ex),
         ]
         print(f"io 워커 시작 — {TEMPORAL} / {Q_WF}, {Q_IO}")

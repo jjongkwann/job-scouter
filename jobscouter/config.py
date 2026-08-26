@@ -108,3 +108,22 @@ class Judgment:
 # 지원서류 5종 — draft_application 출력·write_application allowlist (LLM 출력 파일명을 경로로 쓰지 않는다)
 APP_FILES = ["0_JD.md", "1_맞춤_이력서.md", "2_자기소개서.md",
              "3_면접지식맵.md", "4_포트폴리오_구성.md"]
+
+_APP_DOC = re.compile(r"applications/([0-9A-Za-z_가-힣]+)/([^/]+\.md)")
+_DRAFT_DOC = re.compile(r"drafts/([^/]+\.md)")
+
+
+def resume_target(key: str) -> Path:
+    """채팅·되돌리기·apply_resume이 건드릴 수 있는 파일만 절대경로로. 그 밖은 ValueError.
+    LLM·브라우저가 준 문자열이 경로가 되는 유일한 지점 — allowlist를 여기 한 곳에 모은다."""
+    if key == "factbase":
+        return FACTBASE
+    if key == "JK.md":
+        return JK_MD
+    m = _APP_DOC.fullmatch(key)
+    if m and m.group(2) in APP_FILES + ["README.md"]:
+        return APPLICATIONS / m.group(1) / m.group(2)
+    m = _DRAFT_DOC.fullmatch(key)
+    if m:
+        return DRAFTS / m.group(1)
+    raise ValueError(f"허용되지 않은 이력서 대상: {key}")

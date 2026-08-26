@@ -230,6 +230,17 @@ class ResumeSync:
 
 
 @workflow.defn
+class RevertFile:
+    """웹 되돌리기 버튼이 시작. 과거 커밋 내용을 새 커밋으로 올린다."""
+
+    @workflow.run
+    async def run(self, inp: dict) -> str:      # {"key": str, "sha": str}
+        await workflow.execute_activity("sync_repo", **_IO_OPTS)
+        return await workflow.execute_activity(
+            "git_revert", args=[inp["key"], inp["sha"]], **_IO_OPTS)
+
+
+@workflow.defn
 class ApplyResume:
     """웹앱 승인 버튼이 시작. 사실베이스·JK.md에 승인 항목 반영 → 사실 재색인."""
 

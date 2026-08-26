@@ -6,6 +6,7 @@ workflow 시작(파일 직접 수정 금지). Temporal 접근은 start_publish/r
 1220px 폭·9px 카드·999px 필·4px 왼쪽 레일(=평판 판정)을 그대로 쓴다."""
 import json
 import re
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -20,8 +21,9 @@ from temporalio.client import Client
 
 from jobscouter.config import (APPLICATIONS, DRAFTS, FACTBASE, JK_MD,
                                 JOBFEED, PROPOSALS, Q_WF, REFERENCES,
-                                RESUME_PROPOSALS, TEMPORAL, PublishParams, _app_slug, _norm)
-from jobscouter.workflow import ApplyResume, Draft, Publish
+                                RESUME_PROPOSALS, TEMPORAL, PublishParams, _app_slug, _norm,
+                                resume_target)
+from jobscouter.workflow import ApplyResume, Draft, Publish, RevertFile
 
 # docs_url 등 기본 라우트를 끈다 — /docs는 이 앱의 문서 열람 라우트가 쓴다
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
@@ -31,6 +33,7 @@ KST = ZoneInfo("Asia/Seoul")
 # 무인증 LAN 앱의 브라우저 경유 공격 차단 — 이 레포 데이터에는 이력서·연락처가 있다.
 # Host 허용: IPv4 리터럴 · localhost · 점 없는 LAN 이름 · *.local (DNS 리바인딩은 공개 도메인이 Host로 온다)
 _HOST_OK = re.compile(r"(\d{1,3}(\.\d{1,3}){3}|localhost|[\w-]+|[\w-]+\.local)")
+_SHA = re.compile(r"[0-9a-f]{7,40}")   # subprocess/경로에 쓰기 전 형식 검증 — resume_target()과 같은 이유
 # 문서 본문은 사람·LLM이 쓴 마크다운을 raw HTML 허용으로 렌더링한다 — 스크립트는 CSP로 막는다
 CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data: https:; form-action 'self'; base-uri 'none'"
 CSP_CANDIDATES = CSP.replace("default-src 'none';", "default-src 'none'; script-src 'unsafe-inline';")  # build.py 산출물은 인라인 스크립트로 렌더링
@@ -321,13 +324,38 @@ _DOCS = _jenv.from_string("""
 
 _RESUME = _jenv.from_string("""
 <div class="cols"><div>
-{% for name, html in sections %}<div class="doc" id="{{ loop.index }}"><p class="fn">{{ name }}</p>{{ html|safe }}</div>{% endfor %}
+{% for name, html, key in sections %}<div class="doc" id="{{ loop.index }}"><p class="fn">{{ name }} · <a href="/resume/history?key={{ key }}">이력</a></p>{{ html|safe }}</div>{% endfor %}
 </div><div>
 <div class="side"><h3>갱신 제안</h3><div class="n">{{ pending }}<span style="font-size:12px;font-weight:400;color:var(--dim)"> 건 대기</span></div>
 <p>ResumeSync 매주 월 08:00 · PKB와 대조해 차이만 제안</p>
 <p style="margin-top:8px"><a class="pill" href="/resume/proposals">갱신 제안 보기</a></p></div>
-<div class="side"><h3>문서</h3><div class="files">{% for name, html in sections %}<a href="#{{ loop.index }}">{{ name }}</a>{% endfor %}</div></div>
+<div class="side"><h3>문서</h3><div class="files">{% for name, html, key in sections %}<a href="#{{ loop.index }}">{{ name }}</a>{% endfor %}</div></div>
 <div class="side"><h3>규칙</h3><p>사실베이스는 사람이 검증한 문장만 담습니다. 판정·초안·검색(jobscout_facts)이 모두 이 문서를 읽습니다.</p></div>
+</div></div>""")
+
+_HISTORY_LOG = _jenv.from_string("""
+<div class="list">
+{% for c in commits %}<div class="row plain" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+<div style="font-variant-numeric:tabular-nums;font-size:12px;color:var(--dim)">{{ c.date }}</div>
+<code>{{ c.sha }}</code>
+<div style="flex:1 1 200px;font-size:12.5px">{{ c.subject }}</div>
+<a class="pill" href="/resume/history?key={{ key }}&sha={{ c.sha }}">diff 보기</a>
+<form method="post" action="/resume/revert" style="margin:0">
+<input type="hidden" name="key" value="{{ key }}"><input type="hidden" name="sha" value="{{ c.sha }}">
+<button class="btn" type="submit">이 버전으로 되돌리기</button>
+</form>
+</div>
+{% else %}<div class="empty">커밋 이력 없음</div>{% endfor %}
+</div>""")
+
+_HISTORY = _jenv.from_string("""
+<div class="two"><div>
+<h2 style="margin-top:0">커밋 이력<span class="c">{{ commits|length }}</span></h2>
+{{ log_html|safe }}
+</div><div>
+<div class="side"><h3>diff{% if sha %} · {{ sha }}{% endif %}</h3>
+{% if diff_html %}<pre style="margin:8px 0 0;overflow-x:auto;font-size:11.5px">{{ diff_html|safe }}</pre>
+{% else %}<p>왼쪽에서 「diff 보기」를 눌러 확인</p>{% endif %}</div>
 </div></div>""")
 
 
@@ -348,6 +376,43 @@ def _guard(rel: str) -> None:
     """경로 조작 차단 — 절대경로·`..` 세그먼트."""
     if rel.startswith("/") or ".." in Path(rel).parts:
         raise HTTPException(400, "잘못된 경로")
+
+
+def _git_log(rel: str, n: int = 30) -> list[dict]:
+    """[{"sha","date","subject"}] — 해당 파일을 건드린 커밋만. 읽기 전용 — 자격증명 불필요."""
+    r = subprocess.run(
+        ["git", "-C", str(JOBFEED.parent), "log", f"-{n}",
+         "--format=%h%x09%ad%x09%s", "--date=format:%Y-%m-%d %H:%M", "--", rel],
+        capture_output=True, text=True, timeout=20)
+    out = []
+    for ln in r.stdout.splitlines():
+        sha, _, rest = ln.partition("\t")
+        date, _, subject = rest.partition("\t")
+        out.append({"sha": sha, "date": date, "subject": subject})
+    return out
+
+
+def _git_show(sha: str, rel: str) -> str:
+    """한 커밋이 그 파일에 낸 diff 원문. sha는 호출 전에 검증돼 있어야 한다."""
+    r = subprocess.run(
+        ["git", "-C", str(JOBFEED.parent), "show", "-p", sha, "--", rel],
+        capture_output=True, text=True, timeout=20)
+    return r.stdout
+
+
+def _color_diff(text: str) -> str:
+    """diff 각 줄을 이스케이프한 뒤 +/- 본문 줄만 --good/--bad 토큰으로 색을 준다
+    (+++/--- 헤더 줄은 제외)."""
+    out = []
+    for ln in text.splitlines():
+        esc = str(escape(ln))
+        if ln.startswith("+") and not ln.startswith("+++"):
+            out.append(f'<span style="color:var(--good)">{esc}</span>')
+        elif ln.startswith("-") and not ln.startswith("---"):
+            out.append(f'<span style="color:var(--bad)">{esc}</span>')
+        else:
+            out.append(esc)
+    return "\n".join(out)
 
 
 def _load_proposals() -> list[dict]:
@@ -411,6 +476,14 @@ async def start_draft(cid: str) -> str:
     client = await Client.connect(TEMPORAL)
     handle = await client.start_workflow(
         Draft.run, cid, id=f"draft-{cid}", task_queue=Q_WF)
+    return handle.id
+
+
+async def start_revert(key: str, sha: str) -> str:
+    client = await Client.connect(TEMPORAL)
+    handle = await client.start_workflow(
+        RevertFile.run, {"key": key, "sha": sha},
+        id=f"revert-{sha[:7]}-{uuid4().hex[:6]}", task_queue=Q_WF)
     return handle.id
 
 
@@ -550,19 +623,58 @@ def report(name: str):
 
 @app.get("/resume", response_class=HTMLResponse)
 def resume():
-    sections = []
+    sections = []   # (표시명, html, resume_target 키) — 키는 이력 링크가 쓴다
     if JK_MD.exists():
-        sections.append(("JK.md", _render_md(JK_MD.read_text())))
+        sections.append(("JK.md", _render_md(JK_MD.read_text()), "JK.md"))
     if FACTBASE.exists():
-        sections.append((FACTBASE.name, _render_md(FACTBASE.read_text())))
+        sections.append((FACTBASE.name, _render_md(FACTBASE.read_text()), "factbase"))
     if DRAFTS.exists():
         for p in sorted(DRAFTS.glob("*.md")):
-            sections.append((p.name, _render_md(p.read_text())))
+            sections.append((p.name, _render_md(p.read_text()), f"drafts/{p.name}"))
     body = _RESUME.render(sections=sections, pending=len(_load_resume_proposals()))
     return _render("이력서", body, active="이력서",
                    sub="<b>JK.md</b>(이력서)·<b>이력서_사실베이스.md</b>·<b>drafts/</b>를 그대로 렌더링합니다. "
                        "사실베이스는 판정과 지원서류 초안의 유일한 근거이며, 갱신은 ResumeSync 제안을 승인해야만 반영됩니다.",
                    source="<code>JK.md</code> · <code>references/이력서_사실베이스.md</code> · <code>drafts/*.md</code>")
+
+
+@app.get("/resume/history", response_class=HTMLResponse)
+def resume_history(key: str, sha: str = ""):
+    try:
+        path = resume_target(key)
+    except ValueError:
+        raise HTTPException(400, "허용되지 않은 이력서 대상")
+    try:
+        rel = str(path.relative_to(JOBFEED.parent))
+    except ValueError:
+        # 정상 배치에서는 FACTBASE도 JOBFEED.parent(데이터 repo) 안쪽 — env가 밖으로 잘못 잡힌 경우
+        raise HTTPException(400, f"{key}는 데이터 repo 밖에 있어 이력을 볼 수 없습니다")
+    diff_html = ""
+    if sha:
+        if not _SHA.fullmatch(sha):
+            raise HTTPException(400, "잘못된 sha 형식")
+        diff_html = _color_diff(_git_show(sha, rel))
+    commits = _git_log(rel)
+    body = _HISTORY.render(commits=commits, log_html=_HISTORY_LOG.render(commits=commits, key=key),
+                           diff_html=diff_html, sha=sha)
+    return _render(f"수정 이력 — {key}", body, active="이력서",
+                   sub=f"<code>{escape(key)}</code>의 git 커밋 이력입니다. 되돌리기는 과거 내용을 "
+                       "새 커밋으로 다시 올릴 뿐 히스토리는 지우지 않으므로, 되돌린 것도 다시 되돌릴 수 있습니다. "
+                       '<a href="/resume">이력서 보기로 돌아가기</a>')
+
+
+@app.post("/resume/revert")
+async def resume_revert(request: Request):
+    form = await request.form()
+    key, sha = form.get("key", ""), form.get("sha", "")
+    if not _SHA.fullmatch(sha):
+        raise HTTPException(400, "잘못된 sha 형식")
+    try:
+        resume_target(key)
+    except ValueError:
+        raise HTTPException(400, "허용되지 않은 이력서 대상")
+    await start_revert(key, sha)
+    return RedirectResponse(f"/resume/history?key={key}", status_code=302)
 
 
 def _load_resume_proposals() -> list[dict]:
