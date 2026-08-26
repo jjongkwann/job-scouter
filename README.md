@@ -34,7 +34,7 @@ llm 워커의 `judge.py`에만 있다 — io·workflow·web 모듈은 judge를 i
 | 사실베이스 | `JOBSCOUTER_FACTBASE` | 본인 확인 완료 경력 사실 — judge의 감점 근거 |
 | 루브릭 | `JOBSCOUTER_PROMPTS` | `rubric_v1.md` — `prompts/rubric_v1.example.md`를 채워서 |
 
-서버 설치: `deploy/SERVER_SETUP.md`.
+서버 설치: `deploy/SERVER_SETUP.md`. 설계·계획 문서: `docs/specs/` · `docs/plans/`.
 
 ## 운영
 
