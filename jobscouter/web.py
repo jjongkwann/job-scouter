@@ -20,8 +20,8 @@ from temporalio.client import Client
 
 from jobscouter.config import (APPLICATIONS, DRAFTS, FACTBASE, JK_MD,
                                 JOBFEED, PROPOSALS, Q_WF, REFERENCES,
-                                RESUME_PROPOSALS, TEMPORAL, PublishParams, _norm)
-from jobscouter.workflow import ApplyResume, Publish
+                                RESUME_PROPOSALS, TEMPORAL, PublishParams, _app_slug, _norm)
+from jobscouter.workflow import ApplyResume, Draft, Publish
 
 # docs_url 등 기본 라우트를 끈다 — /docs는 이 앱의 문서 열람 라우트가 쓴다
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
@@ -296,6 +296,21 @@ _CARDS = _jenv.from_string("""
 <div class="m">{% if it.n %}md {{ it.n }}{% else %}md 없음{% endif %} · {{ it.date }}</div></a>{% endfor %}</div>
 {% else %}<div class="empty">없음</div>{% endif %}""")
 
+_LISTED = _jenv.from_string("""
+<h2>등재 공고<span class="c">{{ items|length }}</span></h2>
+<div class="notice">초안 생성은 몇 분 걸립니다 — 완료되면 이 목록에 나타납니다.</div>
+<div class="list">
+{% for it in items %}<div class="row plain" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+<div style="flex:1 1 240px"><div class="pos">{{ it.title }}</div><div class="co">{{ it.company }}</div></div>
+<div class="st"><span class="{{ 'good' if it.has else 'warn' }}">{{ '초안 있음' if it.has else '초안 없음' }}</span></div>
+<form method="post" action="/applications/draft" style="margin:0">
+<input type="hidden" name="id" value="{{ it.id }}">
+<button class="btn" type="submit">{{ '다시 만들기' if it.has else '초안 만들기' }}</button>
+</form>
+</div>
+{% else %}<div class="empty">등재된 공고 없음</div>{% endfor %}
+</div>""")
+
 _DOCS = _jenv.from_string("""
 {% if sections %}{% if sections|length > 1 %}<div class="bar"><span class="lbl">문서</span>
 {% for name, html in sections %}<a class="pill" href="#{{ loop.index }}">{{ name }}</a>{% endfor %}</div>{% endif %}
@@ -387,6 +402,13 @@ async def start_apply_resume(ids: list[str]) -> str:
     handle = await client.start_workflow(
         ApplyResume.run, list(ids),
         id=f"apply-resume-{uuid4().hex[:8]}", task_queue=Q_WF)
+    return handle.id
+
+
+async def start_draft(cid: str) -> str:
+    client = await Client.connect(TEMPORAL)
+    handle = await client.start_workflow(
+        Draft.run, cid, id=f"draft-{cid}", task_queue=Q_WF)
     return handle.id
 
 
@@ -567,6 +589,21 @@ async def resume_apply(request: Request):
     return RedirectResponse("/resume/proposals", status_code=302)
 
 
+def listed_rows() -> list[dict]:
+    """candidates.json 등재 행 → 표시용 dict. has = applications/{slug}(_draft) 존재 여부.
+    최신 행이 위로 오게 역순(행은 등재 순서로 append되므로 뒤가 최신)."""
+    path = JOBFEED / "candidates.json"
+    if not path.exists():
+        return []
+    rows = json.loads(path.read_text())["rows"]
+    out = []
+    for r in rows:
+        slug = _app_slug(r[1])
+        has = (APPLICATIONS / slug).exists() or (APPLICATIONS / f"{slug}_draft").exists()
+        out.append({"id": str(r[2]), "company": r[1], "title": r[0], "slug": slug, "has": has})
+    return out[::-1]
+
+
 @app.get("/applications", response_class=HTMLResponse)
 def applications_index():
     items = []
@@ -576,10 +613,22 @@ def applications_index():
                 mds = list(p.glob("*.md"))
                 items.append({"name": p.name, "href": f"/applications/{p.name}", "n": len(mds),
                               "date": datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d")})
-    return _render("지원서류", _CARDS.render(items=items), active="지원서류",
+    body = _LISTED.render(items=listed_rows()) + _CARDS.render(items=items)
+    return _render("지원서류", body, active="지원서류",
                    sub=f"{len(items)}개사. 승인한 공고는 Publish가 <b>JD·맞춤 이력서·자기소개서·면접지식맵·포트폴리오 구성</b> "
-                       "5종 초안을 <code>_draft</code> 접미사로 만들어 두고, 검토는 사람이 합니다.",
-                   source="<code>applications/&lt;회사&gt;/*.md</code>")
+                       "5종 초안을 <code>_draft</code> 접미사로 만들어 두고, 검토는 사람이 합니다. "
+                       "등재 공고에서는 초안을 다시 요청할 수도 있습니다.",
+                   source="<code>applications/&lt;회사&gt;/*.md</code> · <code>jobfeed/candidates.json</code>")
+
+
+@app.post("/applications/draft")
+async def applications_draft(request: Request):
+    form = await request.form()
+    cid = form.get("id", "")
+    if cid not in {it["id"] for it in listed_rows()}:
+        raise HTTPException(400, "등재되지 않은 공고 — 등재된 공고만 초안을 만든다")
+    await start_draft(cid)
+    return RedirectResponse("/applications", status_code=302)
 
 
 @app.get("/applications/{slug}", response_class=HTMLResponse)

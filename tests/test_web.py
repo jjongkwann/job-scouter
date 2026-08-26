@@ -19,6 +19,11 @@ def repo(tmp_path, monkeypatch):
                 "confidence": 0.9, "rubric_version": "v1", "judged_at": "2026-08-24"},
     }, ensure_ascii=False))
     (jobfeed / "후보목록.html").write_text("<html><body>후보목록 본문</body></html>")
+    (jobfeed / "candidates.json").write_text(json.dumps({
+        "rows": [["백엔드 엔지니어", "테스트회사", 222, [30, 18, 20, 16, -5], None,
+                  "자동판정", [], None]],
+        "skipped": {},
+    }, ensure_ascii=False))
     (jobfeed / "resume_proposals.json").write_text(json.dumps({
         "hash": "h1",
         "items": [
@@ -187,3 +192,33 @@ def test_safe_url_blocks_non_http():
     assert _safe_url("javascript:alert(1)") == "#"
     assert _safe_url("https://www.wanted.co.kr/wd/1") == "https://www.wanted.co.kr/wd/1"
     assert _safe_url(None) == "#"
+
+
+def test_applications_lists_listed_rows(client):
+    r = client.get("/applications")
+    assert r.status_code == 200
+    assert "테스트회사" in r.text and "백엔드 엔지니어" in r.text
+    assert "초안 만들기" in r.text   # applications/ 폴더가 없으니 아직 초안 없음
+
+
+def test_draft_starts_workflow(client, monkeypatch):
+    calls = []
+
+    async def fake_start_draft(cid):
+        calls.append(cid)
+        return "draft-test"
+
+    monkeypatch.setattr(web, "start_draft", fake_start_draft)
+    r = client.post("/applications/draft", data={"id": "222"}, follow_redirects=False)
+
+    assert r.status_code == 302
+    assert r.headers["location"] == "/applications"
+    assert calls == ["222"]
+
+
+def test_draft_rejects_unlisted_id(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(web, "start_draft", lambda cid: calls.append(cid))
+    r = client.post("/applications/draft", data={"id": "999"})
+    assert r.status_code == 400
+    assert calls == []

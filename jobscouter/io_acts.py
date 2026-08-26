@@ -1,7 +1,6 @@
 """io 큐 activity — 자격증명 없음. jobfeed 스크립트 subprocess + 공개 API."""
 import hashlib
 import json
-import re
 import ssl
 import subprocess
 import urllib.request
@@ -11,7 +10,7 @@ from temporalio import activity
 
 from jobscouter.config import (APP_FILES, APPLICATIONS, FACTBASE, JK_MD, JOBFEED,
                                 PKB_CATEGORIES, PKB_INDEX, PKB_STATUSES, PROPOSALS, PY,
-                                RESUME_PROPOSALS, Target, _norm)
+                                RESUME_PROPOSALS, Target, _app_slug, _norm)
 from jobscouter.search import es
 
 
@@ -293,12 +292,6 @@ def reject_proposals(rejects: list[dict]) -> int:
     _commit_and_push(["jobfeed/candidates.json", f"jobfeed/{PROPOSALS}"],
                      f"job-scouter: 제외 {len(rejects)}건")
     return len(rejects)
-
-
-def _app_slug(company: str) -> str:
-    """회사명 → 폴더 slug. 영문 소문자·숫자·`_`, 한글은 그대로."""
-    s = re.sub(r"[^0-9A-Za-z가-힣]+", "_", company).strip("_")
-    return s.lower() or "company"
 
 
 @activity.defn

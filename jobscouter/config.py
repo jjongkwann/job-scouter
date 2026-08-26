@@ -53,6 +53,13 @@ def _norm(s: str) -> str:
     return re.sub(r"\s+", "", s).lower()
 
 
+def _app_slug(company: str) -> str:
+    """회사명 → 폴더 slug. 영문 소문자·숫자·`_`, 한글은 그대로. io_acts·web이 공유(applications/
+    폴더명·존재 확인에 같은 기준을 써야 한다)."""
+    s = re.sub(r"[^0-9A-Za-z가-힣]+", "_", company).strip("_")
+    return s.lower() or "company"
+
+
 @dataclass
 class ScanParams:
     budget_tokens: int = 2_000_000   # 초과 시 잔여는 미점수 강등
