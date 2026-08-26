@@ -4,6 +4,7 @@ workflow 시작(파일 직접 수정 금지). Temporal 접근은 start_publish/r
 
 화면 규격은 후보목록(jobfeed/template.html)과 한 벌 — 색 토큰·14px 시스템 고딕·
 1220px 폭·9px 카드·999px 필·4px 왼쪽 레일(=평판 판정)을 그대로 쓴다."""
+import difflib
 import json
 import re
 import subprocess
@@ -19,11 +20,11 @@ from jinja2 import Environment
 from markupsafe import escape
 from temporalio.client import Client
 
-from jobscouter.config import (APPLICATIONS, DRAFTS, FACTBASE, JK_MD,
+from jobscouter.config import (APPLICATIONS, CHAT_DIR, DRAFTS, FACTBASE, JK_MD,
                                 JOBFEED, PROPOSALS, Q_WF, REFERENCES,
-                                RESUME_PROPOSALS, TEMPORAL, PublishParams, _app_slug, _norm,
-                                resume_target)
-from jobscouter.workflow import ApplyResume, Draft, Publish, RevertFile
+                                RESUME_PROPOSALS, SID_RE, TEMPORAL, PublishParams, _app_slug,
+                                _norm, resume_target)
+from jobscouter.workflow import ApplyResume, Draft, EndChat, Publish, ResumeChat, RevertFile
 
 # docs_url 등 기본 라우트를 끈다 — /docs는 이 앱의 문서 열람 라우트가 쓴다
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
@@ -324,8 +325,11 @@ _DOCS = _jenv.from_string("""
 
 _RESUME = _jenv.from_string("""
 <div class="cols"><div>
-{% for name, html, key in sections %}<div class="doc" id="{{ loop.index }}"><p class="fn">{{ name }} · <a href="/resume/history?key={{ key }}">이력</a></p>{{ html|safe }}</div>{% endfor %}
+{% for name, html, key in sections %}<div class="doc" id="{{ loop.index }}"><p class="fn">{{ name }} · <a href="/resume/history?key={{ key }}">이력</a> · <a href="/resume/chat?key={{ key }}">대화로 고치기</a></p>{{ html|safe }}</div>{% endfor %}
 </div><div>
+<div class="side"><h3>진행 중 대화</h3>
+{% if chats %}<div class="files">{% for c in chats %}<a href="/resume/chat/{{ c.sid }}?key={{ c.target }}">{{ c.target }} · {{ c.n }}턴</a>{% endfor %}</div>
+{% else %}<p>없음</p>{% endif %}</div>
 <div class="side"><h3>갱신 제안</h3><div class="n">{{ pending }}<span style="font-size:12px;font-weight:400;color:var(--dim)"> 건 대기</span></div>
 <p>ResumeSync 매주 월 08:00 · PKB와 대조해 차이만 제안</p>
 <p style="margin-top:8px"><a class="pill" href="/resume/proposals">갱신 제안 보기</a></p></div>
@@ -356,6 +360,34 @@ _HISTORY = _jenv.from_string("""
 <div class="side"><h3>diff{% if sha %} · {{ sha }}{% endif %}</h3>
 {% if diff_html %}<pre style="margin:8px 0 0;overflow-x:auto;font-size:11.5px">{{ diff_html|safe }}</pre>
 {% else %}<p>왼쪽에서 「diff 보기」를 눌러 확인</p>{% endif %}</div>
+</div></div>""")
+
+_CHAT = _jenv.from_string("""
+<div class="two"><div>
+<div class="list">
+{% for t in turns %}<div class="row plain">
+{% if t.role == 'user' %}<div style="font-size:12.5px"><b>나</b> {{ t.text }}</div>
+{% else %}<div style="font-size:12.5px"><b>조수</b> {{ t.text }}
+<span class="st"><span class="good">적용 {{ t.applied }}건</span></span>
+{% if t.skipped %}<div style="font-size:11px;color:var(--dim);margin-top:4px">{% for s in t.skipped %}<div>{{ s }}</div>{% endfor %}</div>{% endif %}
+</div>{% endif %}
+</div>
+{% else %}<div class="empty">아직 대화 없음</div>{% endfor %}
+</div>
+<form method="post" action="/resume/chat/{{ sid }}" class="actions" style="margin-top:10px">
+<input type="hidden" name="key" value="{{ key }}">
+<textarea class="in" name="message" rows="3" placeholder="수정 요청을 입력하세요" style="flex:1"></textarea>
+<button class="btn primary" type="submit">보내기</button>
+</form>
+</div><div>
+<div class="side"><h3>변경사항</h3>
+{% if diff_html %}<pre style="margin:8px 0 0;overflow-x:auto;font-size:11.5px">{{ diff_html|safe }}</pre>
+{% else %}<p>아직 수정 없음</p>{% endif %}</div>
+<form method="post" action="/resume/chat/{{ sid }}/end" class="actions">
+<input type="hidden" name="key" value="{{ key }}">
+<button class="btn primary" type="submit" name="save" value="1">저장</button>
+<button class="btn" type="submit" name="save" value="0">버림</button>
+</form>
 </div></div>""")
 
 
@@ -485,6 +517,33 @@ async def start_revert(key: str, sha: str) -> str:
         RevertFile.run, {"key": key, "sha": sha},
         id=f"revert-{sha[:7]}-{uuid4().hex[:6]}", task_queue=Q_WF)
     return handle.id
+
+
+def load_chat(sid: str) -> dict | None:
+    """채팅 세션 버퍼 읽기 전용 열람 — web은 이 버퍼에 쓰지 않는다(워크플로만 시작)."""
+    path = CHAT_DIR / f"{sid}.json"
+    if not path.exists():
+        return None
+    return json.loads(path.read_text())
+
+
+async def start_resume_chat(sid: str, key: str, message: str) -> dict:
+    """한 턴 실행 후 결과(갱신된 세션 dict)를 기다린다.
+    ponytail: 턴 POST가 LLM 응답까지 블록한다(최대 6분) — LAN 개인 도구라 이걸로 충분.
+    지연이 거슬리면 워크플로를 시작만 하고 페이지에서 폴링하는 방식으로 바꾼다."""
+    buf = load_chat(sid)
+    n = len(buf["turns"]) if buf else 0
+    client = await Client.connect(TEMPORAL)
+    return await client.execute_workflow(
+        ResumeChat.run, {"sid": sid, "key": key, "message": message},
+        id=f"chat-{sid}-{n}", task_queue=Q_WF)
+
+
+async def end_chat(sid: str, save: bool) -> str:
+    client = await Client.connect(TEMPORAL)
+    return await client.execute_workflow(
+        EndChat.run, {"sid": sid, "save": save},
+        id=f"endchat-{sid}", task_queue=Q_WF)
 
 
 async def recent_runs() -> list[dict]:
@@ -621,9 +680,23 @@ def report(name: str):
     return _render(name, _DOCS.render(sections=[(path.name, _render_md(path.read_text()))]), active="보고서")
 
 
+def _chat_sessions() -> list[dict]:
+    """진행 중(미저장) 채팅 세션 목록 — CHAT_DIR 바로 아래 json만(끝난 세션은 done/으로 옮겨져 안 걸림)."""
+    if not CHAT_DIR.exists():
+        return []
+    out = []
+    for p in sorted(CHAT_DIR.glob("*.json")):
+        try:
+            s = json.loads(p.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        out.append({"sid": s["sid"], "target": s["target"], "n": len(s["turns"]) // 2})
+    return out
+
+
 @app.get("/resume", response_class=HTMLResponse)
 def resume():
-    sections = []   # (표시명, html, resume_target 키) — 키는 이력 링크가 쓴다
+    sections = []   # (표시명, html, resume_target 키) — 키는 이력·대화 링크가 쓴다
     if JK_MD.exists():
         sections.append(("JK.md", _render_md(JK_MD.read_text()), "JK.md"))
     if FACTBASE.exists():
@@ -631,7 +704,7 @@ def resume():
     if DRAFTS.exists():
         for p in sorted(DRAFTS.glob("*.md")):
             sections.append((p.name, _render_md(p.read_text()), f"drafts/{p.name}"))
-    body = _RESUME.render(sections=sections, pending=len(_load_resume_proposals()))
+    body = _RESUME.render(sections=sections, pending=len(_load_resume_proposals()), chats=_chat_sessions())
     return _render("이력서", body, active="이력서",
                    sub="<b>JK.md</b>(이력서)·<b>이력서_사실베이스.md</b>·<b>drafts/</b>를 그대로 렌더링합니다. "
                        "사실베이스는 판정과 지원서류 초안의 유일한 근거이며, 갱신은 ResumeSync 제안을 승인해야만 반영됩니다.",
@@ -675,6 +748,63 @@ async def resume_revert(request: Request):
         raise HTTPException(400, "허용되지 않은 이력서 대상")
     await start_revert(key, sha)
     return RedirectResponse(f"/resume/history?key={key}", status_code=302)
+
+
+@app.get("/resume/chat")
+def resume_chat_new(key: str):
+    try:
+        resume_target(key)
+    except ValueError:
+        raise HTTPException(400, "허용되지 않은 이력서 대상")
+    sid = uuid4().hex[:12]
+    return RedirectResponse(f"/resume/chat/{sid}?key={key}", status_code=302)
+
+
+@app.get("/resume/chat/{sid:path}", response_class=HTMLResponse)
+def resume_chat_page(sid: str, key: str = ""):
+    # sid는 경로 세그먼트 하나여야 하지만, %2f로 인코딩된 슬래시가 라우팅 단계에서
+    # 실제 슬래시로 풀려 여러 세그먼트가 될 수 있다 — :path로 받아 여기서 형식 검증한다
+    if not SID_RE.fullmatch(sid):
+        raise HTTPException(400, "잘못된 세션 id")
+    buf = load_chat(sid)
+    target_key = buf["target"] if buf else key   # 첫 턴 전(버퍼 없음)엔 쿼리의 key를 쓴다
+    try:
+        resume_target(target_key)
+    except ValueError:
+        raise HTTPException(400, "허용되지 않은 이력서 대상")
+    diff_html = ""
+    if buf:
+        diff = "\n".join(difflib.unified_diff(
+            buf["base_doc"].splitlines(), buf["doc"].splitlines(), "저장 전", "현재", lineterm=""))
+        diff_html = _color_diff(diff)
+    body = _CHAT.render(sid=sid, key=target_key, turns=buf["turns"] if buf else [], diff_html=diff_html)
+    return _render(f"대화로 고치기 — {target_key}", body, active="이력서",
+                   sub=f"<code>{escape(target_key)}</code>를 대화로 고칩니다. 저장 전까지는 세션 버퍼일 뿐이라 "
+                       '원본은 바뀌지 않습니다. <a href="/resume">이력서 보기로 돌아가기</a>')
+
+
+@app.post("/resume/chat/{sid}")
+async def resume_chat_post(sid: str, request: Request):
+    if not SID_RE.fullmatch(sid):
+        raise HTTPException(400, "잘못된 세션 id")
+    form = await request.form()
+    key, message = form.get("key", ""), form.get("message", "").strip()
+    try:
+        resume_target(key)
+    except ValueError:
+        raise HTTPException(400, "허용되지 않은 이력서 대상")
+    if message:   # 빈 메시지는 무시하고 그냥 돌아간다
+        await start_resume_chat(sid, key, message)
+    return RedirectResponse(f"/resume/chat/{sid}?key={key}", status_code=302)
+
+
+@app.post("/resume/chat/{sid}/end")
+async def resume_chat_end(sid: str, request: Request):
+    if not SID_RE.fullmatch(sid):
+        raise HTTPException(400, "잘못된 세션 id")
+    form = await request.form()
+    await end_chat(sid, form.get("save") == "1")
+    return RedirectResponse("/resume", status_code=302)
 
 
 def _load_resume_proposals() -> list[dict]:

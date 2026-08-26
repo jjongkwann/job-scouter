@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 
 import pytest
@@ -272,3 +273,81 @@ def test_revert_rejects_bad_sha(client, monkeypatch):
     r = client.post("/resume/revert", data={"key": "JK.md", "sha": "zzz"})
     assert r.status_code == 400
     assert calls == []
+
+
+def test_chat_new_session_redirects(client):
+    r = client.get("/resume/chat?key=JK.md", follow_redirects=False)
+    assert r.status_code == 302
+    assert re.fullmatch(r"/resume/chat/[0-9a-f]{12}\?key=JK\.md", r.headers["location"])
+
+
+def test_chat_rejects_bad_key(client):
+    r = client.get("/resume/chat?key=../etc/passwd")
+    assert r.status_code == 400
+
+
+def test_chat_rejects_bad_sid(client):
+    r = client.get("/resume/chat/..%2f..%2fetc")
+    assert r.status_code == 400
+
+
+def test_chat_page_renders_turns_and_diff(client, repo, monkeypatch):
+    chat_dir = repo / "tmp" / "chat"
+    chat_dir.mkdir(parents=True)
+    monkeypatch.setattr(web, "CHAT_DIR", chat_dir)
+    sid = "abcdef123456"
+    (chat_dir / f"{sid}.json").write_text(json.dumps({
+        "sid": sid, "target": "JK.md", "base_sha256": "x",
+        "base_doc": "# JK\n\n이력 요약",
+        "doc": "# JK\n\n이력 요약 (수정됨)",
+        "turns": [
+            {"role": "user", "text": "경력 3년으로 고쳐줘"},
+            {"role": "assistant", "text": "반영했습니다", "applied": 1, "skipped": []},
+        ],
+        "created": "2026-08-26",
+    }, ensure_ascii=False))
+
+    r = client.get(f"/resume/chat/{sid}?key=JK.md")
+    assert r.status_code == 200
+    assert "경력 3년으로 고쳐줘" in r.text and "반영했습니다" in r.text
+    assert "적용 1건" in r.text
+    assert 'style="color:var(--good)"' in r.text   # diff의 + 줄
+
+
+def test_chat_post_starts_workflow(client, monkeypatch):
+    calls = []
+
+    async def fake_start_resume_chat(sid, key, message):
+        calls.append((sid, key, message))
+        return {"turns": []}
+
+    monkeypatch.setattr(web, "start_resume_chat", fake_start_resume_chat)
+    sid = "abcdef123456"
+    r = client.post(f"/resume/chat/{sid}", data={"key": "JK.md", "message": "경력 3년으로"},
+                    follow_redirects=False)
+
+    assert r.status_code == 302
+    assert r.headers["location"] == f"/resume/chat/{sid}?key=JK.md"
+    assert calls == [(sid, "JK.md", "경력 3년으로")]
+
+    r2 = client.post(f"/resume/chat/{sid}", data={"key": "JK.md", "message": "  "},
+                     follow_redirects=False)
+    assert r2.status_code == 302
+    assert calls == [(sid, "JK.md", "경력 3년으로")]   # 빈 메시지는 워크플로를 시작하지 않는다
+
+
+def test_chat_end_save_and_discard(client, monkeypatch):
+    calls = []
+
+    async def fake_end_chat(sid, save):
+        calls.append((sid, save))
+        return "저장됨" if save else "버림"
+
+    monkeypatch.setattr(web, "end_chat", fake_end_chat)
+    sid = "abcdef123456"
+    r1 = client.post(f"/resume/chat/{sid}/end", data={"save": "1"}, follow_redirects=False)
+    r2 = client.post(f"/resume/chat/{sid}/end", data={"save": "0"}, follow_redirects=False)
+
+    assert r1.status_code == 302 and r1.headers["location"] == "/resume"
+    assert r2.status_code == 302 and r2.headers["location"] == "/resume"
+    assert calls == [(sid, True), (sid, False)]
