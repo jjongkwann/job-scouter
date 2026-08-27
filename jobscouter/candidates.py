@@ -125,7 +125,7 @@ def dues() -> dict[str, str]:
 
 def candidate_rows(today: date | None = None) -> list[dict]:
     """candidates.json 행 → 화면용 dict(추천도·순위·마감·통근·평판).
-    순위 #는 내려가지 않은 공고 전체 기준으로 한 번만 매긴다 — 후보목록과 같은 규칙이다."""
+    순위 #는 내려가지도 기한이 지나지도 않은 공고 전체 기준으로 한 번만 매긴다 — 후보목록과 같은 규칙이다."""
     path = JOBFEED / "candidates.json"
     if not path.exists():
         return []
@@ -152,7 +152,9 @@ def candidate_rows(today: date | None = None) -> list[dict]:
                     else f"https://www.wanted.co.kr/wd/{cid}"),
         }
         out.append((row, _rec))
-    for i, (row, _) in enumerate(sorted((x for x in out if not x[0]["closed"]), key=lambda x: -x[1]), 1):
+    for i, (row, _) in enumerate(sorted((x for x in out if not x[0]["closed"]
+                                 and (x[0]["days_left"] is None or x[0]["days_left"] >= 0)),
+                                key=lambda x: -x[1]), 1):
         row["rank"] = i
     return [row for row, _ in out]
 
