@@ -1,6 +1,8 @@
 import json
 import re
 import subprocess
+from datetime import datetime, timedelta
+from urllib.parse import unquote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,7 +22,17 @@ def repo(tmp_path, monkeypatch):
                 "scores": [30, 18, 20, 16, -5], "total": 79,
                 "reason": "필수 스택 일치", "quotes": ["Python 3년 이상"],
                 "confidence": 0.9, "rubric_version": "v1", "judged_at": "2026-08-24"},
+        "333": {"id": "333", "company": "테스트회사", "title": "플랫폼 엔지니어",
+                "url": "https://example.com/333", "src": "wanted",
+                "scores": [20, 15, 15, 12, 0], "total": 62,
+                "reason": "부분 일치", "quotes": [], "confidence": 0.5,
+                "rubric_version": "v1", "judged_at": "2026-08-24"},
     }, ensure_ascii=False))
+    # 마감은 proposals.json이 아니라 jobs.jsonl에 있다
+    soon = (datetime.now(web.KST).date() + timedelta(days=10)).isoformat()
+    (jobfeed / "jobs.jsonl").write_text(
+        json.dumps({"src": "wanted", "id": 111, "due": "2020-01-01"}) + "\n"
+        + json.dumps({"src": "wanted", "id": 333, "due": soon}) + "\n")
     (jobfeed / "후보목록.html").write_text("<html><body>후보목록 본문</body></html>")
     (jobfeed / "candidates.json").write_text(json.dumps({
         "rows": [["백엔드 엔지니어", "테스트회사", 222, [30, 18, 20, 16, -5], None,
@@ -40,16 +52,28 @@ def repo(tmp_path, monkeypatch):
     (jobfeed / "기업평판.md").write_text(
         "| 회사 | 총점 |\n|---|---|\n| 다른회사 | 4.0 |\n")
 
-    (tmp_path / "JK.md").write_text("# JK\n\n이력 요약")
+    (tmp_path / "이력서.md").write_text("# 이력서\n\n이력 요약")
     refs = tmp_path / "references"
     refs.mkdir()
     (refs / "이력서_사실베이스.md").write_text("# 사실베이스\n\n경력 사실")
+    # 사실베이스·drafts는 더 이상 /resume이 렌더하지 않는다 — 아래 두 파일이 응답에
+    # 새지 않는지 확인하는 용도로만 둔다(파일 자체는 web에 patch하지 않는다)
+    drafts = tmp_path / "drafts"
+    drafts.mkdir()
+    (drafts / "old.md").write_text("# 옛날 초안\n\n버려진 초안 본문")
 
     monkeypatch.setattr(web, "JOBFEED", jobfeed)
-    monkeypatch.setattr(web, "JK_MD", tmp_path / "JK.md")
-    monkeypatch.setattr(web, "FACTBASE", refs / "이력서_사실베이스.md")
-    monkeypatch.setattr(web, "DRAFTS", tmp_path / "drafts")
-    monkeypatch.setattr(web, "APPLICATIONS", tmp_path / "applications")
+    monkeypatch.setattr(web, "RESUME", tmp_path / "이력서.md")
+    apps = tmp_path / "applications"
+    (apps / "test_co").mkdir(parents=True)
+    # 연결 키는 회사명이 아니라 문서에 적힌 공고 URL — 폴더명(test_co)은 회사명(테스트회사)과 다르다
+    (apps / "test_co" / "0_JD.md").write_text(
+        "# JD\n\n> 원본: https://www.wanted.co.kr/wd/222\n\n본문")
+    (apps / "test_co" / "1_맞춤_이력서.md").write_text("# 이력서\n\n내용")
+    (apps / "no_link").mkdir()
+    (apps / "no_link" / "README.md").write_text("# 링크 없는 폴더\n\n공고 주소가 없다")
+
+    monkeypatch.setattr(web, "APPLICATIONS", apps)
     monkeypatch.setattr(web, "REFERENCES", refs)
     return tmp_path
 
@@ -68,6 +92,13 @@ def test_dashboard_shows_company_score_and_unresearched(client):
     assert "테스트회사" in r.text.split("평판 미조사 회사")[1]
 
 
+def test_dashboard_marks_past_due(client):
+    r = client.get("/")
+    assert "마감 지남 01-01" in r.text   # 111 — 마감이 지나도 목록에서 사라지지 않는다
+    assert "D-10" in r.text              # 333 — 남은 날짜
+    assert re.search(r'>1</div><div class="l">마감 지남<', r.text)
+
+
 def test_candidates_serves_raw_html(client):
     r = client.get("/candidates")
     assert r.status_code == 200
@@ -84,12 +115,15 @@ def test_reports_render_markdown(client):
     assert "내용입니다" in r.text
 
 
-def test_resume_shows_jk_and_factbase(client):
+def test_resume_shows_single_document(client):
     r = client.get("/resume")
     assert r.status_code == 200
-    assert "JK.md" in r.text
+    assert "이력서.md" in r.text
     assert "이력 요약" in r.text
-    assert "경력 사실" in r.text
+    # 사실베이스·drafts는 더 이상 렌더하지 않는다
+    assert "경력 사실" not in r.text
+    assert "옛날 초안" not in r.text
+    assert "버려진 초안 본문" not in r.text
 
 
 def test_docs_path_traversal_blocked(client):
@@ -197,11 +231,38 @@ def test_safe_url_blocks_non_http():
     assert _safe_url(None) == "#"
 
 
-def test_applications_lists_listed_rows(client):
+def test_applications_joins_folder_by_job_id(client):
+    """폴더 ↔ 공고 연결은 회사명이 아니라 문서에 적힌 공고 id로 한다."""
     r = client.get("/applications")
     assert r.status_code == 200
-    assert "테스트회사" in r.text and "백엔드 엔지니어" in r.text
-    assert "초안 만들기" in r.text   # applications/ 폴더가 없으니 아직 초안 없음
+    linked, orphan = r.text.split("공고를 못 찾은 폴더")
+    assert "test_co" in linked and "테스트회사" in linked   # 폴더명≠회사명인데도 이어졌다
+    assert "2 / 5" in linked                                # 0_JD·1_맞춤_이력서만 있다
+    assert "no_link" in orphan and "test_co" not in orphan
+
+
+def test_job_screen_shows_posting_header(client):
+    r = client.get("/applications/job/222")
+    assert r.status_code == 200
+    assert "백엔드 엔지니어" in r.text and "테스트회사" in r.text
+    assert "79" in r.text                        # 적합도 = 30+18+20+16-5
+    assert "1_맞춤_이력서.md" in r.text          # 문서 탭
+    assert "3_면접지식맵.md 없음" in r.text      # 빠진 표준 문서는 자리를 남긴다
+
+
+def test_job_screen_without_folder_offers_draft(client, monkeypatch):
+    monkeypatch.setattr(web, "APPLICATIONS", web.APPLICATIONS / "없는곳")
+    r = client.get("/applications/job/222")
+    assert r.status_code == 200
+    assert "아직 문서가 없습니다" in r.text and "초안 만들기" in r.text
+
+
+def test_candidates_injects_app_index(client):
+    """후보목록.html은 build.py 산출물 — 웹앱이 색인만 끼워 넣고 본문은 그대로 둔다."""
+    r = client.get("/candidates")
+    assert r.status_code == 200
+    assert "후보목록 본문" in r.text
+    assert '"222"' in r.text.split("window.__APPS__=")[1].split(";</script>")[0]
 
 
 def test_draft_starts_workflow(client, monkeypatch):
@@ -215,7 +276,7 @@ def test_draft_starts_workflow(client, monkeypatch):
     r = client.post("/applications/draft", data={"id": "222"}, follow_redirects=False)
 
     assert r.status_code == 302
-    assert r.headers["location"] == "/applications"
+    assert r.headers["location"] == "/applications/job/222"
     assert calls == ["222"]
 
 
@@ -227,6 +288,11 @@ def test_draft_rejects_unlisted_id(client, monkeypatch):
     assert calls == []
 
 
+def _git(repo, *args):
+    return subprocess.run(["git", "-C", str(repo), *args], check=True,
+                          capture_output=True, text=True)
+
+
 def _init_git(repo):
     subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
     subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t"], check=True)
@@ -234,16 +300,34 @@ def _init_git(repo):
 
 
 def test_history_lists_commits(client, repo, monkeypatch):
-    """resume_target()은 config 모듈 전역을 보므로 web.JK_MD가 아니라 config.JK_MD를 건다."""
+    """resume_target()은 config 모듈 전역을 보므로 web.RESUME가 아니라 config.RESUME를 건다."""
     _init_git(repo)
-    monkeypatch.setattr(config, "JK_MD", repo / "JK.md")
-    subprocess.run(["git", "-C", str(repo), "add", "JK.md"], check=True)
+    monkeypatch.setattr(config, "RESUME", repo / "이력서.md")
+    subprocess.run(["git", "-C", str(repo), "add", "이력서.md"], check=True)
     subprocess.run(["git", "-C", str(repo), "commit", "-m", "이력서 초안"],
                    check=True, capture_output=True)
 
-    r = client.get("/resume/history?key=JK.md")
+    r = client.get("/resume/history", params={"key": "이력서.md"})
     assert r.status_code == 200
     assert "이력서 초안" in r.text
+
+
+def test_history_follows_rename(client, repo, monkeypatch):
+    """이름을 바꾼 파일도 옛 이력이 이어지고 그 시절 diff가 나온다 (JK.md → 이력서.md)."""
+    _init_git(repo)
+    (repo / "이력서.md").unlink()
+    (repo / "JK.md").write_text("# 이력서\n\n옛 이름 시절 본문\n")
+    _git(repo, "add", "JK.md")
+    _git(repo, "commit", "-m", "옛 이름 시절 커밋")
+    old = _git(repo, "rev-parse", "--short", "HEAD").stdout.strip()
+    _git(repo, "mv", "JK.md", "이력서.md")
+    _git(repo, "commit", "-m", "이름 변경")
+    monkeypatch.setattr(config, "RESUME", repo / "이력서.md")
+
+    r = client.get("/resume/history", params={"key": "이력서.md"})
+    assert "옛 이름 시절 커밋" in r.text          # --follow 없으면 이름 변경 커밋 1건만 남는다
+    d = client.get("/resume/history", params={"key": "이력서.md", "sha": old})
+    assert "옛 이름 시절 본문" in d.text          # diff는 그 커밋 시점 이름으로 찾아야 나온다
 
 
 def test_history_rejects_bad_key(client):
@@ -259,26 +343,26 @@ def test_revert_starts_workflow(client, monkeypatch):
         return "revert-test"
 
     monkeypatch.setattr(web, "start_revert", fake_start_revert)
-    r = client.post("/resume/revert", data={"key": "JK.md", "sha": "abc1234"},
+    r = client.post("/resume/revert", data={"key": "이력서.md", "sha": "abc1234"},
                     follow_redirects=False)
 
     assert r.status_code == 302
-    assert r.headers["location"] == "/resume/history?key=JK.md"
-    assert calls == [("JK.md", "abc1234")]
+    assert unquote(r.headers["location"]) == "/resume/history?key=이력서.md"
+    assert calls == [("이력서.md", "abc1234")]
 
 
 def test_revert_rejects_bad_sha(client, monkeypatch):
     calls = []
     monkeypatch.setattr(web, "start_revert", lambda key, sha: calls.append((key, sha)))
-    r = client.post("/resume/revert", data={"key": "JK.md", "sha": "zzz"})
+    r = client.post("/resume/revert", data={"key": "이력서.md", "sha": "zzz"})
     assert r.status_code == 400
     assert calls == []
 
 
 def test_chat_new_session_redirects(client):
-    r = client.get("/resume/chat?key=JK.md", follow_redirects=False)
+    r = client.get("/resume/chat", params={"key": "이력서.md"}, follow_redirects=False)
     assert r.status_code == 302
-    assert re.fullmatch(r"/resume/chat/[0-9a-f]{12}\?key=JK\.md", r.headers["location"])
+    assert re.fullmatch(r"/resume/chat/[0-9a-f]{12}\?key=이력서\.md", unquote(r.headers["location"]))
 
 
 def test_chat_rejects_bad_key(client):
@@ -297,9 +381,9 @@ def test_chat_page_renders_turns_and_diff(client, repo, monkeypatch):
     monkeypatch.setattr(web, "CHAT_DIR", chat_dir)
     sid = "abcdef123456"
     (chat_dir / f"{sid}.json").write_text(json.dumps({
-        "sid": sid, "target": "JK.md", "base_sha256": "x",
-        "base_doc": "# JK\n\n이력 요약",
-        "doc": "# JK\n\n이력 요약 (수정됨)",
+        "sid": sid, "target": "이력서.md", "base_sha256": "x",
+        "base_doc": "# 이력서\n\n이력 요약",
+        "doc": "# 이력서\n\n이력 요약 (수정됨)",
         "turns": [
             {"role": "user", "text": "경력 3년으로 고쳐줘"},
             {"role": "assistant", "text": "반영했습니다", "applied": 1, "skipped": []},
@@ -307,7 +391,7 @@ def test_chat_page_renders_turns_and_diff(client, repo, monkeypatch):
         "created": "2026-08-26",
     }, ensure_ascii=False))
 
-    r = client.get(f"/resume/chat/{sid}?key=JK.md")
+    r = client.get(f"/resume/chat/{sid}", params={"key": "이력서.md"})
     assert r.status_code == 200
     assert "경력 3년으로 고쳐줘" in r.text and "반영했습니다" in r.text
     assert "적용 1건" in r.text
@@ -323,17 +407,17 @@ def test_chat_post_starts_workflow(client, monkeypatch):
 
     monkeypatch.setattr(web, "start_resume_chat", fake_start_resume_chat)
     sid = "abcdef123456"
-    r = client.post(f"/resume/chat/{sid}", data={"key": "JK.md", "message": "경력 3년으로"},
+    r = client.post(f"/resume/chat/{sid}", data={"key": "이력서.md", "message": "경력 3년으로"},
                     follow_redirects=False)
 
     assert r.status_code == 302
-    assert r.headers["location"] == f"/resume/chat/{sid}?key=JK.md"
-    assert calls == [(sid, "JK.md", "경력 3년으로")]
+    assert unquote(r.headers["location"]) == f"/resume/chat/{sid}?key=이력서.md"
+    assert calls == [(sid, "이력서.md", "경력 3년으로")]
 
-    r2 = client.post(f"/resume/chat/{sid}", data={"key": "JK.md", "message": "  "},
+    r2 = client.post(f"/resume/chat/{sid}", data={"key": "이력서.md", "message": "  "},
                      follow_redirects=False)
     assert r2.status_code == 302
-    assert calls == [(sid, "JK.md", "경력 3년으로")]   # 빈 메시지는 워크플로를 시작하지 않는다
+    assert calls == [(sid, "이력서.md", "경력 3년으로")]   # 빈 메시지는 워크플로를 시작하지 않는다
 
 
 def test_chat_end_shows_reason_instead_of_500(client, monkeypatch, tmp_path):
@@ -343,7 +427,7 @@ def test_chat_end_shows_reason_instead_of_500(client, monkeypatch, tmp_path):
     chat = tmp_path / "chat"
     chat.mkdir()
     (chat / f"{sid}.json").write_text(json.dumps(
-        {"sid": sid, "target": "JK.md", "base_sha256": "x", "base_doc": "a",
+        {"sid": sid, "target": "이력서.md", "base_sha256": "x", "base_doc": "a",
          "doc": "b", "turns": [], "created": "2026-08-27"}, ensure_ascii=False))
     monkeypatch.setattr(web, "CHAT_DIR", chat)
 
@@ -359,8 +443,8 @@ def test_chat_end_shows_reason_instead_of_500(client, monkeypatch, tmp_path):
     assert r.status_code == 200
     assert "저장하지 못했습니다" in r.text
     assert "세션 시작 후" in r.text
-    assert f"/resume/chat/{sid}" in r.text        # 대화로 돌아가는 길
-    assert "/resume/history?key=JK.md" in r.text  # 무엇이 바뀌었는지 보는 길
+    assert f"/resume/chat/{sid}" in r.text          # 대화로 돌아가는 길
+    assert "/resume/history?key=이력서.md" in r.text  # 무엇이 바뀌었는지 보는 길
 
 
 def test_chat_end_save_and_discard(client, monkeypatch):

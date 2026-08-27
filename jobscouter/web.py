@@ -8,7 +8,7 @@ import difflib
 import json
 import re
 import subprocess
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -20,10 +20,9 @@ from jinja2 import Environment
 from markupsafe import escape
 from temporalio.client import Client
 
-from jobscouter.config import (APPLICATIONS, CHAT_DIR, DRAFTS, FACTBASE, JK_MD,
-                                JOBFEED, PROPOSALS, Q_WF, REFERENCES,
-                                RESUME_PROPOSALS, SID_RE, TEMPORAL, PublishParams, _app_slug,
-                                _norm, resume_target)
+from jobscouter.config import (APP_FILES, APPLICATIONS, CHAT_DIR, JOBFEED, PROPOSALS, Q_WF,
+                                REFERENCES, RESUME, RESUME_PROPOSALS, SID_RE, TEMPORAL,
+                                PublishParams, _norm, git_path_at, job_cid, resume_target)
 from jobscouter.workflow import ApplyResume, Draft, EndChat, Publish, ResumeChat, RevertFile
 
 # docs_url 등 기본 라우트를 끈다 — /docs는 이 앱의 문서 열람 라우트가 쓴다
@@ -125,6 +124,10 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px}
 .pos a{color:inherit;text-decoration:none}
 .pos a:hover{text-decoration:underline;text-underline-offset:2px}
 .co{color:var(--dim);font-size:12px;margin-top:1px}
+.co .due{font-variant-numeric:tabular-nums}
+.co .due.gone,.co .due.u0{color:var(--bad)}
+.co .due.gone{font-weight:600}
+.co .due.u1{color:var(--warn)}
 .fit{display:flex;align-items:center;gap:7px}
 .fit .v{font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;min-width:24px;text-align:right}
 .fit .track{flex:1;height:5px;border-radius:3px;background:var(--neubg);overflow:hidden}
@@ -187,13 +190,69 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px}
 .card .t{font-size:13.5px;font-weight:600;letter-spacing:-.1px}
 .card .m{font-size:11px;color:var(--dim);margin-top:3px;font-variant-numeric:tabular-nums}
 .card.none .t{color:var(--faint)}
+/* 지원서류 — 공고 헤더·문서 칩. 후보목록 행의 어휘(4px 평판 레일·적합도 막대·굵은 추천도)를 카드로 옮긴 것 */
+.app .head,.app .row{grid-template-columns:minmax(150px,.8fr) minmax(230px,1.5fr) 66px 76px 152px 96px}
+.orphan .head,.orphan .row{grid-template-columns:minmax(150px,.9fr) minmax(0,1.6fr) 96px}
+.row.gone{opacity:.55}
+.co.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;margin-top:2px}
+.jd{font-size:12.5px;line-height:1.35}
+.jd .m{font-size:11px;color:var(--dim);margin-top:2px;font-variant-numeric:tabular-nums}
+.rk{font-size:15px;font-weight:800;line-height:1.1;font-variant-numeric:tabular-nums}
+.rk .n{font-size:10px;font-weight:600;color:var(--dim);display:block;margin-top:1px}
+.rk.r1{color:var(--good)}.rk.r2{color:var(--fg)}.rk.r3{color:var(--dim)}
+.due{font-size:12px;line-height:1.3}
+.due .d{font-weight:700;font-variant-numeric:tabular-nums}
+.due.u0 .d{color:var(--bad)}.due.u1 .d{color:var(--warn)}
+.due.always .d{font-weight:400;color:var(--faint);font-size:11.5px}
+.due.gone .d{color:var(--bad);text-decoration:line-through}
+.loc{font-size:12px;line-height:1.3}
+.loc .z{font-weight:700}
+.loc.z0 .z,.loc.z1 .z{color:var(--good)}.loc.z2 .z{color:var(--warn)}
+.loc.z3 .z,.loc.z4 .z{color:var(--bad)}.loc.z9 .z{color:var(--dim);font-weight:400}
+.repc{font-size:12px;line-height:1.4}
+.repc .s{font-weight:700;font-variant-numeric:tabular-nums}
+.repc .s.v-good{color:var(--good)}.repc .s.v-warn{color:var(--warn)}.repc .s.v-bad{color:var(--bad)}
+.repc .t{font-size:10.5px;color:var(--dim);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.repc .m{font-size:11px;color:var(--dim);margin-top:3px;line-height:1.4}
+.repc.none{color:var(--faint)}
+.docs{display:flex;align-items:center;gap:6px}
+.pips{display:flex;gap:3px}
+.pip{width:17px;height:17px;border-radius:4px;background:var(--neubg);color:var(--faint);font-size:9.5px;
+  font-weight:700;display:flex;align-items:center;justify-content:center;font-variant-numeric:tabular-nums}
+.pip.on{background:var(--goodbg);color:var(--good)}
+.dn{font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
+.dn.part{color:var(--warn);font-weight:600}
+.mt{font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
+.jh{border:1px solid var(--line);border-left:4px solid var(--rail-none);border-radius:9px;
+  background:var(--row);padding:14px 16px 12px;margin-bottom:16px}
+.jh.v-good{border-left-color:var(--rail-good)}
+.jh.v-warn{border-left-color:var(--rail-warn)}
+.jh.v-bad{border-left-color:var(--rail-bad)}
+.jh.gone{opacity:.62}
+.jh-top{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;
+  padding-bottom:12px;border-bottom:1px solid var(--line)}
+.jh-pos{font-size:16px;font-weight:700;letter-spacing:-.2px;line-height:1.3;
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.jh-co{color:var(--dim);font-size:12px;margin-top:3px}
+.jh-top .rk{font-size:17px;text-align:right}
+.jh-grid{display:grid;grid-template-columns:250px 96px 158px minmax(0,1fr);gap:20px;
+  padding:12px 0;border-bottom:1px solid var(--line)}
+.jh-l{font-size:11px;color:var(--dim);margin-bottom:5px}
+.jh-s{font-size:11px;color:var(--dim);margin-top:4px;line-height:1.45}
+.jh-act{display:flex;align-items:center;gap:8px;padding-top:11px;flex-wrap:wrap}
+.jh-act .meta{font-size:11px;color:var(--dim);margin-right:auto}
+.pill.miss{border-style:dashed;color:var(--faint)}
+.oth{padding:7px 0;border-bottom:1px solid var(--line)}
+.oth:last-child{border-bottom:0}
+.oth .m{font-size:11px;color:var(--dim);margin-top:2px;font-variant-numeric:tabular-nums}
 .empty{padding:32px;text-align:center;color:var(--dim);border:1px dashed var(--line);border-radius:9px;background:var(--row);font-size:13px;margin-bottom:12px}
 .notice{padding:10px 14px;border:1px solid var(--line);border-radius:9px;background:var(--row);font-size:12.5px;margin-bottom:12px;line-height:1.5}
 .notice.bad{border-color:var(--rail-bad);background:var(--badbg);color:var(--bad)}
 footer{margin-top:32px;padding-top:18px;border-top:1px solid var(--line);color:var(--dim);font-size:12.5px}
 footer p{margin:0 0 7px}
-@media(max-width:1060px){.dash .head,.rp .head,.rep .head{display:none}
-  .dash .row,.rp .row,.rep .row{grid-template-columns:1fr;gap:6px;padding:13px 14px}
+@media(max-width:1060px){.dash .head,.rp .head,.rep .head,.app .head,.orphan .head{display:none}
+  .dash .row,.rp .row,.rep .row,.app .row,.orphan .row{grid-template-columns:1fr;gap:6px;padding:13px 14px}
+  .jh-grid{grid-template-columns:1fr;gap:12px}
   .sc{text-align:left}.cols,.two{grid-template-columns:1fr}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
 </style>
 """
@@ -228,7 +287,7 @@ _DASHBOARD = _jenv.from_string("""
 <div>판정 사유 · 인용</div><div style="text-align:center">승인</div><div>거부 사유</div></div>
 {% for p in proposals %}
 <div class="row v-{{ p.rail }}">
-<div><div class="pos"><a href="{{ p.url|safe_url }}" target="_blank" rel="noopener">{{ p.title }}</a></div><div class="co">{{ p.company }}</div></div>
+<div><div class="pos"><a href="{{ p.url|safe_url }}" target="_blank" rel="noopener">{{ p.title }}</a></div><div class="co">{{ p.company }}{% if p.due %} · <span class="due {{ p.due_cls }}">{{ p.due }}</span>{% endif %}</div></div>
 <div class="fit {{ p.tier }}"><span class="v">{{ p.total }}</span><span class="track"><span class="fill" style="width:{{ p.total }}%"></span></span></div>
 {% for v, cls in p.cells %}<div class="sc {{ cls }}">{{ v }}</div>{% endfor %}
 <div class="conf">{{ '%.2f'|format(p.confidence or 0) }}</div>
@@ -294,28 +353,86 @@ _GROUPS = _jenv.from_string("""
 {% endfor %}</div>{% endfor %}</div>
 {% if not cols %}<div class="empty">없음</div>{% endif %}""")
 
-_CARDS = _jenv.from_string("""
-{% if items %}<div class="cards">{% for it in items %}
-<a class="card{{ ' none' if not it.n }}" href="{{ it.href }}"><div class="t">{{ it.name }}</div>
-<div class="m">{% if it.n %}md {{ it.n }}{% else %}md 없음{% endif %} · {{ it.date }}</div></a>{% endfor %}</div>
-{% else %}<div class="empty">없음</div>{% endif %}""")
-
-_LISTED = _jenv.from_string("""
-<h2>등재 공고<span class="c">{{ items|length }}{% if total > items|length %} / {{ total }}</span></h2>
-{% else %}</span></h2>{% endif %}
-<div class="notice">초안 생성은 몇 분 걸립니다 — 완료되면 이 목록에 나타납니다.
-{% if total > items|length %}등재 {{ total }}건 중 최근 {{ items|length }}건만 보여줍니다 — 그 이전 공고는 <code>worker draft &lt;공고id&gt;</code>로.{% endif %}</div>
-<div class="list">
-{% for it in items %}<div class="row plain" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
-<div style="flex:1 1 240px"><div class="pos">{{ it.title }}</div><div class="co">{{ it.company }}</div></div>
-<div class="st"><span class="{{ 'good' if it.has else 'warn' }}">{{ '초안 있음' if it.has else '초안 없음' }}</span></div>
-<form method="post" action="/applications/draft" style="margin:0">
-<input type="hidden" name="id" value="{{ it.id }}">
-<button class="btn" type="submit">{{ '다시 만들기' if it.has else '초안 만들기' }}</button>
-</form>
-</div>
-{% else %}<div class="empty">등재된 공고 없음</div>{% endfor %}
+_APPS = _jenv.from_string("""
+<h2>공고에 연결된 폴더<span class="c">{{ items|length }}</span></h2>
+<div class="list app">
+<div class="head"><div>회사 · 폴더</div><div>연결된 공고</div><div>추천도</div><div>마감</div>
+<div>문서 (0_JD … 4_포트폴리오)</div><div>최종 수정</div></div>
+{% for it in items %}<div class="row v-{{ it.c.rep_key }}{{ ' gone' if it.c.closed }}">
+<div><div class="pos"><a href="/applications/job/{{ it.c.id }}">{{ it.c.company }}</a></div>
+<div class="co mono">{{ it.slug }}</div></div>
+<div class="jd"><div>{{ it.c.title }}</div><div class="m">{{ it.c.id }}{% if it.others %} · 이 회사 공고 {{ it.others + 1 }}건{% endif %}</div></div>
+<div class="rk {{ 'r1' if it.c.rec >= 85 else 'r2' if it.c.rec >= 70 else 'r3' }}">{{ it.c.rec }}
+<span class="n">{% if it.c.rank %}#{{ it.c.rank }}{% else %}마감{% endif %}</span></div>
+<div class="due {{ it.c.due_cls }}"><span class="d">{{ it.c.due }}</span></div>
+<div class="docs"><div class="pips">{% for p in it.pips %}<span class="pip{{ ' on' if p.on }}">{{ p.n }}</span>{% endfor %}</div>
+<span class="dn{{ '' if it.docs|length == 5 else ' part' }}">{{ '5종' if it.docs|length == 5 else '%d / 5'|format(it.docs|length) }}</span></div>
+<div class="mt">{{ it.mtime }}</div></div>
+{% else %}<div class="empty">공고에 연결된 폴더가 아직 없습니다</div>{% endfor %}
 </div>""")
+
+_ORPHANS = _jenv.from_string("""
+{% if items %}<h2>공고를 못 찾은 폴더<span class="c">{{ items|length }}</span></h2>
+<div class="notice">문서에 적힌 공고가 후보목록에서 <b>내려간</b> 경우와, 공고 링크가 <b>아예 없는</b> 경우입니다.
+후자는 문서 어딘가에 원티드·점핏 링크를 한 줄 적어 주면 다음 열람부터 이어집니다.</div>
+<div class="list orphan">
+{% for it in items %}<div class="row plain">
+<div><div class="pos"><a href="/applications/{{ it.slug }}">{{ it.slug }}</a></div>
+<div class="co">md {{ it.files|length }}{% if it.ids %} · {{ it.ids|join(', ') }}{% endif %}</div></div>
+<div style="font-size:12.5px;color:var(--dim)">{{ it.why }}</div>
+<div class="st"><span class="{{ it.cls }}">{{ it.badge }}</span></div>
+</div>{% endfor %}
+</div>{% endif %}""")
+
+_JOBHEAD = _jenv.from_string("""
+<div class="jh v-{{ c.rep_key }}{{ ' gone' if c.closed }}">
+<div class="jh-top"><div>
+<div class="jh-pos">{{ c.title }}
+<span class="st"><span class="{{ 'bad' if c.closed }}">{{ '공고 마감' if c.closed else ('초안 없음' if not folder else '미지원') }}</span></span></div>
+<div class="jh-co">{{ c.company }} ·
+<a href="{{ c.url|safe_url }}" target="_blank" rel="noopener">{{ '점핏' if c.id.startswith('j') else '원티드' }} {{ c.id }} ↗</a>
+{% if folder %} · <code>applications/{{ folder.slug }}</code>{% endif %}</div></div>
+<div class="rk {{ 'r1' if c.rec >= 85 else 'r2' if c.rec >= 70 else 'r3' }}">{{ c.rec }}
+<span class="n">추천도{% if c.rank %} · #{{ c.rank }}{% endif %}</span></div></div>
+<div class="jh-grid">
+<div><div class="jh-l">적합도</div>
+<div class="fit {{ c.tier }}"><span class="v">{{ c.total }}</span>
+<span class="track"><span class="fill" style="width:{{ c.total }}%"></span></span></div>
+<div class="jh-s">스택 {{ c.scores[0] }} · 도메인 {{ c.scores[1] }} · 레벨 {{ c.scores[2] }} · 역할 {{ c.scores[3] }} · 감점 {{ c.scores[4] or '—' }}</div></div>
+<div><div class="jh-l">마감</div><div class="due {{ c.due_cls }}"><span class="d">{{ c.due }}</span></div></div>
+<div><div class="jh-l">근무지 · 통근</div><div class="loc z{{ c.zone }}"><span class="z">{{ c.zone_label }}</span></div>
+<div class="jh-s">{{ c.addr }}</div></div>
+<div><div class="jh-l">평판</div>
+{% if c.rep %}<div class="repc"><span class="s v-{{ c.rep_key }}">{{ c.rep_label }} {{ c.rep[1] }}</span>
+<span class="t">/ {{ c.rep[2] }}건 · ★{{ c.rep[3] }}</span><div class="m">{{ c.rep[4] }}</div></div>
+{% else %}<div class="repc none">{{ c.rep_note }}</div>{% endif %}</div>
+</div>
+<div class="jh-act">
+{% if folder %}<span class="meta">최종 수정 {{ folder.mtime }} · 문서 {{ folder.docs|length }}/5</span>{% endif %}
+<a class="pill" href="/candidates">후보목록에서 보기</a>
+<form method="post" action="/applications/draft" style="margin:0">
+<input type="hidden" name="id" value="{{ c.id }}">
+<button class="btn{{ '' if folder else ' primary' }}" type="submit">{{ '초안 다시 만들기' if folder else '5종 초안 만들기' }}</button>
+</form></div>
+</div>""")
+
+_JOBDOCS = _jenv.from_string("""
+<div class="cols"><div>
+{% if tabs %}<div class="bar"><span class="lbl">문서</span>
+{% for t in tabs %}{% if t.missing %}<span class="pill miss">{{ t.name }} 없음</span>
+{% else %}<a class="pill" href="?doc={{ t.name }}" aria-pressed="{{ 'true' if t.on else 'false' }}">{{ t.name }}</a>{% endif %}{% endfor %}</div>
+<div class="doc"><p class="fn">{{ cur }}</p>{{ html|safe }}</div>
+{% else %}<div class="empty">아직 문서가 없습니다.<br>
+<span style="font-size:12px">초안 생성은 몇 분 걸립니다 — 끝나면 <code>0_JD</code>부터 <code>4_포트폴리오_구성</code>까지 5종이 이 자리에 채워집니다.</span></div>{% endif %}
+</div><div>
+{% if others %}<div class="side"><h3>이 회사의 다른 공고 {{ others|length }}건</h3>
+{% for o in others %}<div class="oth"><a href="/applications/job/{{ o.id }}">{{ o.title }}</a>
+<div class="m">추천도 {{ o.rec }}{% if o.rank %} · #{{ o.rank }}{% endif %} · {{ o.due }} · 적합도 {{ o.total }}</div></div>{% endfor %}
+</div>{% endif %}
+{% if folder and folder.files|length > folder.docs|length %}<div class="side"><h3>표준 5종이 아닌 파일</h3>
+<div class="files">{% for f in folder.files %}{% if f not in ['0_JD.md','1_맞춤_이력서.md','2_자기소개서.md','3_면접지식맵.md','4_포트폴리오_구성.md'] %}
+<a href="?doc={{ f }}">{{ f }}</a>{% endif %}{% endfor %}</div></div>{% endif %}
+</div></div>""")
 
 _NOTICE = _jenv.from_string("""
 <div class="notice bad"><b>저장하지 못했습니다.</b> {{ cause }}</div>
@@ -421,9 +538,10 @@ def _guard(rel: str) -> None:
 
 
 def _git_log(rel: str, n: int = 30) -> list[dict]:
-    """[{"sha","date","subject"}] — 해당 파일을 건드린 커밋만. 읽기 전용 — 자격증명 불필요."""
+    """[{"sha","date","subject"}] — 해당 파일을 건드린 커밋만. --follow라 이름을 바꾸기 전
+    이력도 이어진다(JK.md → 이력서.md). 읽기 전용 — 자격증명 불필요."""
     r = subprocess.run(
-        ["git", "-C", str(JOBFEED.parent), "log", f"-{n}",
+        ["git", "-C", str(JOBFEED.parent), "log", f"-{n}", "--follow",
          "--format=%h%x09%ad%x09%s", "--date=format:%Y-%m-%d %H:%M", "--", rel],
         capture_output=True, text=True, timeout=20)
     out = []
@@ -435,7 +553,9 @@ def _git_log(rel: str, n: int = 30) -> list[dict]:
 
 
 def _git_show(sha: str, rel: str) -> str:
-    """한 커밋이 그 파일에 낸 diff 원문. sha는 호출 전에 검증돼 있어야 한다."""
+    """한 커밋이 그 파일에 낸 diff 원문. sha는 호출 전에 검증돼 있어야 한다.
+    이름을 바꾸기 전 커밋은 옛 이름으로만 나온다 — git_path_at으로 그 시점 경로를 찾는다."""
+    rel = git_path_at(str(JOBFEED.parent), sha, rel)
     r = subprocess.run(
         ["git", "-C", str(JOBFEED.parent), "show", "-p", sha, "--", rel],
         capture_output=True, text=True, timeout=20)
@@ -486,14 +606,38 @@ def _reputation() -> dict[str, str]:
     return out
 
 
-def _decorate(p: dict, rep: dict[str, str]) -> dict:
+def _dues() -> dict[str, str]:
+    """{공고id: 'YYYY-MM-DD'|'상시'} — 마감은 proposals.json에 없고 jobs.jsonl에만 있다."""
+    # ponytail: fetch 시점 값 — 조기 마감은 안 잡힌다. 필요하면 refresh_due.py를 proposals까지 확장
+    path = JOBFEED / "jobs.jsonl"
+    if not path.exists():
+        return {}
+    rows = (json.loads(ln) for ln in path.read_text().splitlines() if ln.strip())
+    return {job_cid(j): (j.get("due") or "상시") for j in rows}
+
+
+def _due_label(raw: str | None, today: date) -> tuple[str, str]:
+    """(표시, css) — 마감이 지난 후보도 목록에 남으므로 대시보드에서 바로 가려낼 수 있게."""
+    if not raw or raw == "상시":
+        return (raw or "", "")
+    try:
+        left = (date.fromisoformat(raw[:10]) - today).days
+    except ValueError:
+        return (raw, "")   # 외부 API가 준 값 — 못 읽으면 그대로 보여준다
+    if left < 0:
+        return (f"마감 지남 {raw[5:10]}", "gone")
+    return (f"D-{left}" if left else "D-day", "u0" if left <= 3 else "u1" if left <= 7 else "")
+
+
+def _decorate(p: dict, rep: dict[str, str], dues: dict[str, str], today: date) -> dict:
     """템플릿용 파생 필드 — 후보목록 rowHTML과 같은 규칙(hi ≥85%, lo ≤40%, 총점 등급)."""
     sc = list(p.get("scores") or []) + [0] * 5
     cells = [(v, "hi" if v / m >= .85 else ("lo" if v / m <= .4 else "")) for v, m in zip(sc, _MAX)]
     cells.append((sc[4] or "·", "pen" if sc[4] else ""))
     total = p.get("total", 0)
+    due, due_cls = _due_label(dues.get(str(p["id"])), today)
     return {**p, "cells": cells, "tier": "t1" if total >= 80 else "t2" if total >= 70 else "t3",
-            "rail": rep.get(_norm(p.get("company", "")), "none")}
+            "rail": rep.get(_norm(p.get("company", "")), "none"), "due": due, "due_cls": due_cls}
 
 
 # --- Temporal 접근 — 이 세 함수만 client를 만든다. 테스트에서 monkeypatch. ---
@@ -615,7 +759,8 @@ async def dashboard():
     rep = _reputation()
     pub = await _latest_publish_safe()
     busy = set(pub["ids"]) | set(pub["reject_ids"]) if pub and pub["status"] == "RUNNING" else set()
-    proposals = [_decorate(p, rep) for p in _load_proposals() if str(p["id"]) not in busy]
+    dues, today = _dues(), datetime.now(KST).date()
+    proposals = [_decorate(p, rep, dues, today) for p in _load_proposals() if str(p["id"]) not in busy]
     unresearched = sorted({p["company"] for p in proposals if _norm(p["company"]) not in rep})
     runs, runs_error = None, None
     try:
@@ -624,6 +769,7 @@ async def dashboard():
         runs_error = str(e)
     stats = _STATS.render(items=[(len(proposals), "승인 대기"),
                                  (sum(1 for p in proposals if p.get("total", 0) >= 75), "적합도 75+"),
+                                 (sum(1 for p in proposals if p["due_cls"] == "gone"), "마감 지남"),
                                  (len(unresearched), "평판 미조사 회사"), ("09:07", "다음 DailyScan")])
     body = stats + _DASHBOARD.render(proposals=proposals, unresearched=unresearched,
                                      runs=runs, runs_error=runs_error, pub=pub,
@@ -651,18 +797,25 @@ async def publish(request: Request):
 
 @app.get("/candidates", response_class=HTMLResponse)
 def candidates():
-    """build.py 산출물을 그대로 내보내되 사이트 내비만 끼워 넣는다 — 원본 템플릿은
-    build.py --open으로 단독으로도 열리므로 손대지 않는다."""
+    """build.py 산출물을 그대로 내보내되 사이트 내비와 지원서류 색인만 끼워 넣는다.
+    원본은 build.py --open으로 단독으로도 열려야 하므로 손대지 않는다 —
+    template.html은 window.__APPS__가 없으면 지원서류 칩을 그리지 않는다."""
     path = JOBFEED / "후보목록.html"
     if not path.exists():
         return _render("후보목록", '<div class="empty">아직 없음 — Publish 실행 후 생성됨</div>', active="후보목록")
     html = path.read_text()
     html = html.replace("</head>", f"<style>{NAV_CSS}</style></head>", 1)
+    apps = {cid: {"slug": f["slug"], "n": len(f["docs"])}
+            for f in app_folders() for cid in f["ids"]}
+    # 폴더명에는 `/`가 못 들어가지만 </script> 조기 종료는 값과 무관하게 막아 둔다
+    inject = ("<script>window.__APPS__="
+              + json.dumps(apps, ensure_ascii=False).replace("</", "<\\/") + ";</script>")
     nav = _nav("후보목록")
     if '<div class="wrap">' in html:
         html = html.replace('<div class="wrap">', '<div class="wrap">' + nav, 1)
     else:
         html = html.replace("<body>", "<body>" + nav, 1)
+    html = html.replace("<body>", "<body>" + inject, 1)
     return HTMLResponse(html, headers={"Content-Security-Policy": CSP_CANDIDATES})
 
 
@@ -707,18 +860,14 @@ def _chat_sessions() -> list[dict]:
 @app.get("/resume", response_class=HTMLResponse)
 def resume():
     sections = []   # (표시명, html, resume_target 키) — 키는 이력·대화 링크가 쓴다
-    if JK_MD.exists():
-        sections.append(("JK.md", _render_md(JK_MD.read_text()), "JK.md"))
-    if FACTBASE.exists():
-        sections.append((FACTBASE.name, _render_md(FACTBASE.read_text()), "factbase"))
-    if DRAFTS.exists():
-        for p in sorted(DRAFTS.glob("*.md")):
-            sections.append((p.name, _render_md(p.read_text()), f"drafts/{p.name}"))
+    if RESUME.exists():
+        sections.append(("이력서.md", _render_md(RESUME.read_text()), "이력서.md"))
     body = _RESUME.render(sections=sections, pending=len(_load_resume_proposals()), chats=_chat_sessions())
     return _render("이력서", body, active="이력서",
-                   sub="<b>JK.md</b>(이력서)·<b>이력서_사실베이스.md</b>·<b>drafts/</b>를 그대로 렌더링합니다. "
-                       "사실베이스는 판정과 지원서류 초안의 유일한 근거이며, 갱신은 ResumeSync 제안을 승인해야만 반영됩니다.",
-                   source="<code>JK.md</code> · <code>references/이력서_사실베이스.md</code> · <code>drafts/*.md</code>")
+                   sub="이력서 정본 <b>이력서.md</b> 한 문서를 그대로 렌더링합니다. 「대화로 고치기」·"
+                       "「이력」은 이 문서 하나에 걸립니다. 판정·초안의 근거인 사실베이스는 "
+                       '<a href="/docs">/docs</a>에서 볼 수 있고, 갱신은 ResumeSync 제안을 승인해야만 반영됩니다.',
+                   source="<code>이력서.md</code>")
 
 
 @app.get("/resume/history", response_class=HTMLResponse)
@@ -858,62 +1007,198 @@ async def resume_apply(request: Request):
     return RedirectResponse("/resume/proposals", status_code=302)
 
 
-LISTED_CAP = 30   # /applications 「등재 공고」 표시 상한 — 검증(POST)은 전건 대상
+# --- 후보목록 ↔ 지원서류 ------------------------------------------------------
+# 연결 키는 회사명이 아니라 **공고 id**다. 폴더명은 사람이 영문으로 바꿔 두는 일이 잦아
+# (폴더는 영문 슬러그, 회사명은 한글) _app_slug(회사명)으로는 33개 중 1개밖에 못 맞췄다.
+# 대신 문서에 적힌 공고 URL을 읽는다 — write_application이 README에 박아 두고,
+# 사람이 만든 폴더도 대개 0_JD/README에 원문 링크를 적어 뒀다.
+_JOB_URL = re.compile(r"wanted\.co\.kr/wd/(\d+)|jumpit\.saramin\.co\.kr/position/(\d+)")
 
 
-def listed_rows() -> list[dict]:
-    """candidates.json 등재 행 → 표시용 dict. has = applications/{slug}(_draft) 존재 여부.
-    최신 행이 위로 오게 역순(행은 등재 순서로 append되므로 뒤가 최신)."""
+def app_folders() -> list[dict]:
+    """applications/*/ → [{slug, ids, files, docs, mtime}]. ids는 문서에서 읽은 공고 id."""
+    # ponytail: 요청마다 폴더 전체를 다시 읽는다(수십 개 · 수 MB). LAN 1인용이라 캐시 없음 —
+    # 느려지면 폴더 mtime을 키로 memoize
+    out = []
+    if not APPLICATIONS.exists():
+        return out
+    for d in sorted(APPLICATIONS.iterdir()):
+        if not d.is_dir():
+            continue
+        ids: list[str] = []
+        files = sorted(p.name for p in d.glob("*.md"))
+        for name in files:
+            for wanted, jumpit in _JOB_URL.findall((d / name).read_text(errors="replace")):
+                cid = wanted or f"j{jumpit}"
+                if cid not in ids:
+                    ids.append(cid)
+        out.append({"slug": d.name, "ids": ids, "files": files,
+                    "docs": [f for f in files if f in APP_FILES],
+                    "mtime": datetime.fromtimestamp(d.stat().st_mtime).strftime("%Y-%m-%d")})
+    return out
+
+
+def job_index() -> dict[str, dict]:
+    """{공고 id: 폴더}. 한 폴더가 공고 여럿을 가리키면 그 전부가 같은 폴더로 온다."""
+    return {cid: f for f in app_folders() for cid in f["ids"]}
+
+
+# 추천도 = 적합도 × 평판계수 + 통근보정. 계산식 원본은 jobfeed/template.html의 REC·ZONE 표다.
+# ponytail: 파이썬으로 옮겨 적은 사본 — template.html은 build.py가 굽는 산출물이라 서버가
+# 그 값을 넘겨받을 길이 없다. 계산식을 고치면 두 곳을 같이 고쳐야 한다.
+_ZONE = [
+    (4, "통근 불가", re.compile(r"^(부산|대구|광주광역시|대전|울산|세종|강원|충[북남청]|전[북남라]|경[북남상]|제주)")),
+    (0, "성남권", re.compile(r"성남|판교")),
+    (1, "40분대", re.compile(r"(강남|서초|송파|강동)구|하남|광주시|경기\s*광주|용인\S*\s*(수지|기흥)|과천|의왕|구리시")),
+    (2, "60~80분", re.compile(r"서울|수원|안양|군포|용인|화성|동탄")),
+    (3, "수도권 외곽", re.compile(r"인천|부천|고양|김포|파주|의정부|남양주|광명|시흥|안산|평택|오산|이천|여주|양주|포천|동두천|가평|양평|안성|경기")),
+    (4, "통근 불가", re.compile(r".")),
+]
+_REP_MUL = {"good": 1.00, "warn": 0.88, "bad": 0.65, "none": 0.95}
+_ZONE_ADJ = {0: 8, 1: 3, 2: 0, 3: -12, 4: -45, 9: 0}
+_REP_LABEL = {"good": "괜찮음", "warn": "주의", "bad": "회피"}
+
+
+def _zone(addr: str | None) -> tuple[int, str]:
+    if not addr:
+        return (9, "미확인")
+    for n, label, rx in _ZONE:
+        if rx.search(addr):
+            return (n, label)
+    return (9, "미확인")
+
+
+def _cand_due(raw, today: date) -> tuple[str, str]:
+    """candidates.json 마감 표기 — None=상시 · 'closed'=마감됨 · 'YYYY-MM-DD'."""
+    if raw == "closed":
+        return ("마감됨", "gone")
+    if not raw:
+        return ("상시", "always")
+    return _due_label(raw, today)
+
+
+def candidate_rows() -> list[dict]:
+    """candidates.json 행 → 화면용 dict(추천도·순위·마감·통근·평판).
+    순위 #는 내려가지 않은 공고 전체 기준으로 한 번만 매긴다 — 후보목록과 같은 규칙이다."""
     path = JOBFEED / "candidates.json"
     if not path.exists():
         return []
-    rows = json.loads(path.read_text())["rows"]
+    today = datetime.now(KST).date()
     out = []
-    for r in rows:
-        slug = _app_slug(r[1])
-        has = (APPLICATIONS / slug).exists() or (APPLICATIONS / f"{slug}_draft").exists()
-        out.append({"id": str(r[2]), "company": r[1], "title": r[0], "slug": slug, "has": has})
-    return out[::-1]
+    for r in json.loads(path.read_text())["rows"]:
+        cid, total = str(r[2]), sum(r[3])
+        addr = r[8] if len(r) > 8 else None   # 근무지는 refresh_due.py가 나중에 붙인다 — 새 행에는 없다
+        zn, zlabel = _zone(addr)
+        rep = r[4]
+        k = rep[0] if rep else "none"
+        conf = (rep[2] or 0) if rep else 0
+        mul = 1.00 + 0.12 * min(conf / 40, 1) if k == "good" else _REP_MUL[k]
+        due, due_cls = _cand_due(r[7], today)
+        out.append({
+            "id": cid, "company": r[1], "title": r[0], "scores": list(r[3]) + [0] * (5 - len(r[3])),
+            "total": total, "rep": rep, "rep_key": k, "rep_label": _REP_LABEL.get(k, ""),
+            "rep_note": r[5] or "", "tags": r[6] or [], "addr": addr or "",
+            "zone": zn, "zone_label": zlabel, "due": due, "due_cls": due_cls, "closed": r[7] == "closed",
+            # 순위는 반올림 전 값으로 매긴다 — 반올림하면 84.6과 85.4가 동점이 돼 후보목록과 어긋난다
+            "_rec": total * mul + _ZONE_ADJ[zn], "rec": round(total * mul + _ZONE_ADJ[zn]), "rank": None,
+            "tier": "t1" if total >= 80 else "t2" if total >= 70 else "t3",
+            "url": (f"https://jumpit.saramin.co.kr/position/{cid[1:]}" if cid.startswith("j")
+                    else f"https://www.wanted.co.kr/wd/{cid}"),
+        })
+    for i, c in enumerate(sorted((c for c in out if not c["closed"]), key=lambda c: -c["_rec"]), 1):
+        c["rank"] = i
+    return out
+
+
+def _folder_view(folder: dict, doc: str) -> tuple[str, list, str]:
+    """(선택된 문서명, 탭 목록, 본문 html). doc이 없거나 이상하면 첫 문서로."""
+    files = folder["files"]
+    if not files:
+        return ("", [], "")
+    cur = doc if doc in files else files[0]
+    tabs = [{"name": f, "on": f == cur} for f in files]
+    tabs += [{"name": f, "on": False, "missing": True} for f in APP_FILES if f not in files]
+    return (cur, tabs, _render_md((APPLICATIONS / folder["slug"] / cur).read_text()))
 
 
 @app.get("/applications", response_class=HTMLResponse)
 def applications_index():
-    items = []
-    if APPLICATIONS.exists():
-        for p in sorted(APPLICATIONS.iterdir()):
-            if p.is_dir():
-                mds = list(p.glob("*.md"))
-                items.append({"name": p.name, "href": f"/applications/{p.name}", "n": len(mds),
-                              "date": datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d")})
-    rows = listed_rows()
-    # ponytail: 등재 행은 수백 건이라 전부 그리면 페이지가 길어진다. 잘랐다는 사실은 화면에 표시한다.
-    body = _LISTED.render(items=rows[:LISTED_CAP], total=len(rows)) + _CARDS.render(items=items)
+    cands = {c["id"]: c for c in candidate_rows()}
+    linked, orphans = [], []
+    for f in app_folders():
+        hits = [cands[i] for i in f["ids"] if i in cands]
+        if hits:
+            c = max(hits, key=lambda c: c["_rec"])
+            same = [x for x in cands.values() if _norm(x["company"]) == _norm(c["company"])]
+            linked.append({**f, "c": c, "others": len(same) - 1,
+                           "pips": [{"n": n[0], "on": n in f["docs"]} for n in APP_FILES]})
+        else:
+            orphans.append({**f, "why": ("문서의 공고 id가 후보목록에 없음 — 내려갔거나 거부된 공고"
+                                         if f["ids"] else "문서 어디에도 공고 링크가 없음"),
+                            "badge": "공고 내려감" if f["ids"] else "id 없음",
+                            "cls": "warn" if f["ids"] else "bad"})
+    linked.sort(key=lambda x: -x["c"]["_rec"])
+    stats = _STATS.render(items=[
+        (len(cands), "등재 공고"), (len(linked) + len(orphans), "지원서류 폴더"),
+        (len(linked), "공고에 연결됨"),
+        (sum(1 for o in orphans if o["ids"]), "공고 내려감"),
+        (sum(1 for o in orphans if not o["ids"]), "id 없음 — 수동 연결"),
+    ])
+    body = stats + _APPS.render(items=linked) + _ORPHANS.render(items=orphans)
     return _render("지원서류", body, active="지원서류",
-                   sub=f"{len(items)}개사. 승인한 공고는 Publish가 <b>JD·맞춤 이력서·자기소개서·면접지식맵·포트폴리오 구성</b> "
-                       "5종 초안을 <code>_draft</code> 접미사로 만들어 두고, 검토는 사람이 합니다. "
-                       "등재 공고에서는 초안을 다시 요청할 수도 있습니다.",
-                   source="<code>applications/&lt;회사&gt;/*.md</code> · <code>jobfeed/candidates.json</code>")
+                   sub="폴더와 등재 공고를 <b>공고 id</b>로 이어 한 줄로 보여줍니다 — 회사명이 아니라 "
+                       "문서에 적힌 <code>wanted.co.kr/wd/{id}</code>가 연결 키입니다. "
+                       "승인한 공고는 Publish가 <b>JD·맞춤 이력서·자기소개서·면접지식맵·포트폴리오 구성</b> "
+                       "5종 초안을 만들어 두고, 검토는 사람이 합니다.",
+                   source="<code>applications/&lt;폴더&gt;/*.md</code> · <code>jobfeed/candidates.json</code>")
 
 
 @app.post("/applications/draft")
 async def applications_draft(request: Request):
     form = await request.form()
     cid = form.get("id", "")
-    if cid not in {it["id"] for it in listed_rows()}:
+    if cid not in {c["id"] for c in candidate_rows()}:
         raise HTTPException(400, "등재되지 않은 공고 — 등재된 공고만 초안을 만든다")
     await start_draft(cid)
-    return RedirectResponse("/applications", status_code=302)
+    return RedirectResponse(f"/applications/job/{cid}", status_code=302)
+
+
+@app.get("/applications/job/{cid}", response_class=HTMLResponse)
+def application_job(cid: str, doc: str = ""):
+    """공고 한 건의 지원 화면 — 후보목록 행이 오는 곳. 문서가 없으면 초안 만들기만 보인다."""
+    cands = {c["id"]: c for c in candidate_rows()}
+    c = cands.get(cid)
+    if not c:
+        raise HTTPException(404, "등재되지 않은 공고")
+    folder = job_index().get(cid)
+    others = [x for x in cands.values()
+              if _norm(x["company"]) == _norm(c["company"]) and x["id"] != cid]
+    others.sort(key=lambda x: -x["_rec"])
+    cur, tabs, html = _folder_view(folder, doc) if folder else ("", [], "")
+    body = _JOBHEAD.render(c=c, folder=folder) + _JOBDOCS.render(
+        c=c, folder=folder, cur=cur, tabs=tabs, html=html, others=others)
+    return _render(c["company"], body, active="지원서류",
+                   sub=f"<code>applications/{escape(folder['slug'])}</code> · 문서 {len(folder['docs'])}/5"
+                       if folder else "이 공고에 연결된 지원서류 폴더가 아직 없습니다.")
 
 
 @app.get("/applications/{slug}", response_class=HTMLResponse)
-def application(slug: str):
+def application(slug: str, doc: str = ""):
+    """공고에 연결되지 않은 폴더 — 문서만 보여준다. 연결되면 /applications/job/{id}로 간다."""
     _guard(slug)
     d = APPLICATIONS / slug
     if not d.exists():
         raise HTTPException(404, "지원서류 없음")
-    sections = [(p.name, _render_md(p.read_text())) for p in sorted(d.glob("*.md"))]
-    return _render(slug, _DOCS.render(sections=sections), active="지원서류",
-                   sub=f"<code>applications/{escape(slug)}</code> · md {len(sections)}")
+    folder = next((f for f in app_folders() if f["slug"] == slug), None)
+    linked = next((i for i in (folder["ids"] if folder else [])
+                   if i in {c["id"] for c in candidate_rows()}), None)
+    if linked:
+        return RedirectResponse(f"/applications/job/{linked}", status_code=302)
+    cur, tabs, html = _folder_view(folder, doc)
+    body = _JOBDOCS.render(c=None, folder=folder, cur=cur, tabs=tabs, html=html, others=[])
+    return _render(slug, body, active="지원서류",
+                   sub=f"<code>applications/{escape(slug)}</code> · md {len(folder['files'])} · "
+                       "후보목록의 공고와 연결되지 않았습니다 — 문서에 공고 링크를 적으면 이어집니다.")
 
 
 @app.get("/docs", response_class=HTMLResponse)

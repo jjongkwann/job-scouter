@@ -89,13 +89,15 @@ uv run uvicorn jobscouter.web:app --host 0.0.0.0 --port 8090   # 터미널 3 —
 | 경로 | 내용 |
 |---|---|
 | `/` | `proposals.json` 대시보드(점수·사유·인용) + 승인/거부 체크 → `Publish` 시작. 평판 미조사 회사·최근 실행 상태 |
-| `/candidates` | `build.py` 산출 `후보목록.html` 그대로 |
+| `/candidates` | `build.py` 산출 `후보목록.html` 그대로 + 지원서류 색인(`window.__APPS__`) 주입 — 행마다 「지원서류 n종 →」/「초안 만들기 →」 |
 | `/reports`, `/reports/{name}` | 사이클 보고서 목록·렌더 |
 | `/resume/proposals` | 이력서 갱신 제안 승인 → ApplyResume |
-| `/resume` | `JK.md`·사실베이스·`drafts/` 렌더. 문서별 「대화로 고치기」·「이력」 링크, 진행 중 대화 목록 |
+| `/resume` | 이력서 정본 `이력서.md` 한 문서 렌더. 「대화로 고치기」·「이력」 링크, 진행 중 대화 목록 |
 | `/resume/chat`, `/resume/chat/{sid}` | 대화로 이력서 수정. 한 턴 = `ResumeChat` 워크플로 1회. 수정은 세션 버퍼에만 쌓이고 `저장`을 눌러야 파일 반영 + 커밋 1개(`EndChat`) |
 | `/resume/history` | 문서별 커밋 목록·diff. 「되돌리기」는 과거 내용을 **새 커밋으로** 올린다(`RevertFile`) — 히스토리를 지우지 않으므로 되돌린 것도 되돌릴 수 있다 |
-| `/applications`, `/applications/{slug}` | 회사별 지원서류 5종 렌더. 등재 공고에서 초안 (재)생성 요청 → `Draft` |
+| `/applications` | 폴더 ↔ 등재 공고를 **공고 id로 조인**한 목록(추천도·마감·문서 5종 표시) + 못 이은 폴더 |
+| `/applications/job/{공고id}` | 공고 한 건의 지원 화면 — 공고 요약 헤더(추천도·적합도·마감·통근·평판) + 문서 탭. 초안 (재)생성 → `Draft` |
+| `/applications/{폴더}` | 공고에 연결되지 않은 폴더의 문서만. 연결되면 `/applications/job/{id}`로 리다이렉트 |
 | `/docs`, `/docs/{path}` | `references/` 문서 렌더(하위 디렉토리 포함) |
 
 워커가 꺼져 있어도 워크플로는 서버에서 대기하고, 워커를 켜면 이어진다.

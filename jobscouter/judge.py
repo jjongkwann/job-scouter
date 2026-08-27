@@ -12,7 +12,7 @@ from datetime import date
 
 from temporalio import activity
 
-from jobscouter.config import (APP_FILES, APP_EXAMPLE, APPLICATIONS, DATA, FACTBASE, JK_MD,
+from jobscouter.config import (APP_FILES, APP_EXAMPLE, APPLICATIONS, DATA, FACTBASE, RESUME,
                                JOBFEED, JUDGE_MODEL, PROMPTS, JudgeInput, Judgment)
 
 
@@ -54,7 +54,7 @@ RESUME_SCHEMA = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "target": {"type": "string", "enum": ["factbase", "JK.md"]},
+                    "target": {"type": "string", "enum": ["factbase", "이력서.md"]},
                     "section": {"type": "string", "description": "대상 문서 내 절 제목"},
                     "kind": {"type": "string", "enum": ["add", "change", "remove"]},
                     "current": {"type": "string",
@@ -123,7 +123,7 @@ def _claude(prompt: str, system: str, max_usd: float,
     """claude -p 1회. 결과 JSON(structured_output·result·usage·total_cost_usd)을 돌려준다.
 
     프롬프트는 argv로 넘기지 않는다 — 리눅스는 인수 하나가 128KB를 넘으면 실행 자체가
-    실패한다(E2BIG, 실측: 초안 시스템 프롬프트 = 사실베이스+JK.md ≈ 110KB). 시스템 프롬프트는
+    실패한다(E2BIG, 실측: 초안 시스템 프롬프트 = 사실베이스+이력서.md ≈ 110KB). 시스템 프롬프트는
     파일, 사용자 프롬프트는 stdin."""
     cmd = [CLAUDE, "-p", "--model", JUDGE_MODEL,
            "--effort", EFFORT, "--max-budget-usd", str(max_usd), *_LEAN]
@@ -201,7 +201,7 @@ def draft_application(company: str, title: str, posting: str) -> dict[str, str]:
     rules = readme_path.read_text() if readme_path.exists() else ""
     system = (
         f"<사실베이스>\n{FACTBASE.read_text()}\n</사실베이스>\n\n"
-        f"<JK.md>\n{JK_MD.read_text()}\n</JK.md>\n\n"
+        f"<이력서>\n{RESUME.read_text()}\n</이력서>\n\n"
         f"<지원서류 규칙>\n{rules}\n</지원서류 규칙>\n\n"
         f"<형식 예시 — {APP_EXAMPLE}사>\n{_example_docs()}\n</형식 예시>"
     )
@@ -224,19 +224,19 @@ def draft_application(company: str, title: str, posting: str) -> dict[str, str]:
 
 @activity.defn
 def propose_resume_update(snapshot_text: str) -> list[dict]:
-    """PKB curated 발췌(snapshot_text)를 사실베이스·JK.md와 대조해 갱신 제안만 낸다.
+    """PKB curated 발췌(snapshot_text)를 사실베이스·이력서.md와 대조해 갱신 제안만 낸다.
     이미 있는 내용은 제외, 날짜·숫자는 PKB 원문 그대로, 추정 금지. id는 여기서
     안 만든다(io_acts.save_resume_proposals가 내용 해시로 부여)."""
     system = (
-        "너는 이력서 갱신 제안기다. PKB(개인 지식베이스) 최신 발췌를 사실베이스·JK.md와 "
-        "대조해 반영할 변경만 제안한다. 규칙: 사실베이스·JK.md에 이미 있는 내용은 "
+        "너는 이력서 갱신 제안기다. PKB(개인 지식베이스) 최신 발췌를 사실베이스·이력서.md와 "
+        "대조해 반영할 변경만 제안한다. 규칙: 사실베이스·이력서.md에 이미 있는 내용은 "
         "제안하지 않는다. 날짜·숫자는 PKB 원문 그대로 옮기고 추정하지 않는다. "
         "PKB 발췌에 근거 없는 내용은 절대 제안하지 않는다.\n\n"
         f"<사실베이스>\n{FACTBASE.read_text()}\n</사실베이스>\n\n"
-        f"<JK.md>\n{JK_MD.read_text()}\n</JK.md>"
+        f"<이력서>\n{RESUME.read_text()}\n</이력서>"
     )
     prompt = (f"<PKB 발췌>\n{snapshot_text}\n</PKB 발췌>\n\n"
-              "위 PKB 발췌를 기준으로 사실베이스·JK.md 갱신 제안 목록을 만들어라. "
+              "위 PKB 발췌를 기준으로 사실베이스·이력서.md 갱신 제안 목록을 만들어라. "
               "반영할 변경이 없으면 빈 목록을 반환하라.")
     d = _claude(prompt, system, max_usd=1.0, schema=RESUME_SCHEMA)
     return list(d["structured_output"]["proposals"])

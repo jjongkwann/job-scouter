@@ -1,6 +1,7 @@
 """공유 상수·타입. 머신별 값(서버 주소·데이터 경로)은 .env로 — .env.example 참조."""
 import os
 import re
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -40,9 +41,8 @@ PKB_CATEGORIES = _env("JOBSCOUTER_PKB_CATEGORIES", "career,about,상용 서비�
 PKB_STATUSES = _env("JOBSCOUTER_PKB_STATUSES", "canonical,active,evergreen,draft-rewrite,in-progress")
 
 # 데이터 repo 레이아웃(JOBFEED.parent가 루트) — 웹앱 열람·지원서류 초안이 쓴다
-JK_MD = JOBFEED.parent / "JK.md"
+RESUME = JOBFEED.parent / "이력서.md"
 REFERENCES = JOBFEED.parent / "references"
-DRAFTS = JOBFEED.parent / "drafts"
 APPLICATIONS = JOBFEED.parent / "applications"
 APP_EXAMPLE = _env("JOBSCOUTER_APP_EXAMPLE", "example")   # 형식 앵커 — applications/ 아래 회사 폴더명
 CHAT_DIR = JOBFEED.parent / "tmp" / "chat"     # 데이터 repo .gitignore의 tmp/ 아래 — 커밋 안 됨
@@ -62,6 +62,11 @@ def _app_slug(company: str) -> str:
     폴더명·존재 확인에 같은 기준을 써야 한다)."""
     s = re.sub(r"[^0-9A-Za-z가-힣]+", "_", company).strip("_")
     return s.lower() or "company"
+
+
+def job_cid(j: dict) -> str:
+    """jobs.jsonl 한 줄 → candidates.json 관례 id. io_acts(판정 대상)·web(마감 표시)이 공유."""
+    return str(j["id"]) if j["src"] == "wanted" else f"j{j['id']}"
 
 
 @dataclass
@@ -114,7 +119,21 @@ APP_FILES = ["0_JD.md", "1_맞춤_이력서.md", "2_자기소개서.md",
              "3_면접지식맵.md", "4_포트폴리오_구성.md"]
 
 _APP_DOC = re.compile(r"applications/([0-9A-Za-z_가-힣]+)/([^/]+\.md)")
-_DRAFT_DOC = re.compile(r"drafts/([^/]+\.md)")
+
+
+def git_path_at(repo: str, sha: str, rel: str) -> str:
+    """`sha` 시점의 `rel` 경로. 이름을 바꾼 파일은 옛 이름으로만 조회되는데,
+    커밋을 지정한 git show/log에는 --follow가 듣지 않아 이름 표를 따로 만든다.
+    이력 보기(web)와 되돌리기(io)가 같은 규칙을 써야 해서 여기 둔다. 못 찾으면 rel 그대로."""
+    r = subprocess.run(
+        ["git", "-C", repo, "-c", "core.quotePath=false", "log", "--follow",
+         "--format=%x00%h", "--name-only", "--", rel],
+        capture_output=True, text=True, timeout=20)
+    for chunk in r.stdout.split("\0")[1:]:
+        lines = [ln for ln in chunk.splitlines() if ln.strip()]
+        if len(lines) > 1 and (lines[0].startswith(sha) or sha.startswith(lines[0])):
+            return lines[1]
+    return rel
 
 
 def resume_target(key: str) -> Path:
@@ -122,12 +141,9 @@ def resume_target(key: str) -> Path:
     LLM·브라우저가 준 문자열이 경로가 되는 유일한 지점 — allowlist를 여기 한 곳에 모은다."""
     if key == "factbase":
         return FACTBASE
-    if key == "JK.md":
-        return JK_MD
+    if key == "이력서.md":
+        return RESUME
     m = _APP_DOC.fullmatch(key)
     if m and m.group(2) in APP_FILES + ["README.md"]:
         return APPLICATIONS / m.group(1) / m.group(2)
-    m = _DRAFT_DOC.fullmatch(key)
-    if m:
-        return DRAFTS / m.group(1)
     raise ValueError(f"허용되지 않은 이력서 대상: {key}")

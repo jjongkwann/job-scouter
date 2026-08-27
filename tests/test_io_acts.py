@@ -172,14 +172,20 @@ def test_write_application_creates_5_files_and_readme_then_drafts_on_conflict(tm
              ["0_JD.md", "1_맞춤_이력서.md", "2_자기소개서.md",
               "3_면접지식맵.md", "4_포트폴리오_구성.md"]}
 
-    path = io_acts.write_application("테스트회사", files)
+    target = {"id": "222", "company": "테스트회사", "title": "백엔드",
+              "src": "wanted", "url": "https://www.wanted.co.kr/wd/222"}
+
+    path = io_acts.write_application(target, files)
     folder = Path(path)
     assert folder.name == "테스트회사"   # 한글 그대로
     for name, content in files.items():
         assert (folder / name).read_text() == content
-    assert "지원 전 체크리스트" in (folder / "README.md").read_text()
+    readme = (folder / "README.md").read_text()
+    assert "지원 전 체크리스트" in readme
+    # 공고 URL이 README에 남아야 후보목록과 이어진다(web.job_index가 이 줄을 읽는다)
+    assert "공고: https://www.wanted.co.kr/wd/222" in readme
 
-    path2 = io_acts.write_application("테스트회사", files)   # 폴더 이미 있음 → _draft 접미
+    path2 = io_acts.write_application(target, files)   # 폴더 이미 있음 → _draft 접미
     assert Path(path2).name == "테스트회사_draft"
 
 
@@ -266,7 +272,7 @@ def test_write_application_rejects_traversal_names(tmp_path, monkeypatch):
     monkeypatch.setattr(io_acts, "_commit_and_push", lambda paths, msg: "ok")
     bad = {**{n: "x" for n in APP_FILES[:-1]}, "../../evil.md": "x"}
     with pytest.raises(ValueError):
-        io_acts.write_application("회사", bad)          # 탈출 파일명은 걸러지고 5종 미달로 거부
+        io_acts.write_application({"company": "회사", "url": "u"}, bad)   # 탈출 파일명은 걸러지고 5종 미달로 거부
     assert not (tmp_path / "evil.md").exists()
     assert io_acts._app_slug("../x/..") == "x"   # slug는 경로 문자를 제거한다
 
@@ -359,18 +365,18 @@ def test_apply_resume_change_add_remove_and_reports_failures(tmp_path, monkeypat
     factbase = tmp_path / "facts.md"
     factbase.write_text("# 사실베이스\n\n## 경력\n\n3년차 백엔드 엔지니어\n\n"
                         "## 자격증\n\n정보처리기사\n")
-    jk = tmp_path / "JK.md"
-    jk.write_text("# JK\n\n소개\n")
+    resume_file = tmp_path / "이력서.md"
+    resume_file.write_text("# 이력서\n\n소개\n")
     # resume_target()이 config 모듈 전역을 참조하므로 patch도 거기에 건다(io_acts가 아니라)
     monkeypatch.setattr(config, "FACTBASE", factbase)
-    monkeypatch.setattr(config, "JK_MD", jk)
+    monkeypatch.setattr(config, "RESUME", resume_file)
 
     items = [
         {"id": "id-change", "target": "factbase", "section": "경력", "kind": "change",
          "current": "3년차 백엔드 엔지니어", "proposed": "4년차 백엔드 엔지니어", "evidence": "e"},
         {"id": "id-remove", "target": "factbase", "section": "자격증", "kind": "remove",
          "current": "정보처리기사", "proposed": "", "evidence": "e"},
-        {"id": "id-add", "target": "JK.md", "section": "소개", "kind": "add",
+        {"id": "id-add", "target": "이력서.md", "section": "소개", "kind": "add",
          "current": "", "proposed": "새 프로젝트 경험", "evidence": "e"},
         {"id": "id-mismatch", "target": "factbase", "section": "경력", "kind": "change",
          "current": "원문에 없는 문장", "proposed": "x", "evidence": "e"},
@@ -387,9 +393,9 @@ def test_apply_resume_change_add_remove_and_reports_failures(tmp_path, monkeypat
     fb_text = factbase.read_text()
     assert "4년차 백엔드 엔지니어" in fb_text and "3년차" not in fb_text
     assert "정보처리기사" not in fb_text
-    jk_text = jk.read_text()
-    assert "## 미분류 추가(자동 제안 승인)" in jk_text
-    assert "새 프로젝트 경험" in jk_text
+    resume_text = resume_file.read_text()
+    assert "## 미분류 추가(자동 제안 승인)" in resume_text
+    assert "새 프로젝트 경험" in resume_text
 
     remaining = json.loads((jobfeed / "resume_proposals.json").read_text())["items"]
     assert {it["id"] for it in remaining} == {"id-mismatch"}   # 반영분만 제거됨
@@ -397,17 +403,16 @@ def test_apply_resume_change_add_remove_and_reports_failures(tmp_path, monkeypat
 
 def test_resume_target_allowlist(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "FACTBASE", tmp_path / "facts.md")
-    monkeypatch.setattr(config, "JK_MD", tmp_path / "JK.md")
+    monkeypatch.setattr(config, "RESUME", tmp_path / "이력서.md")
     monkeypatch.setattr(config, "APPLICATIONS", tmp_path / "applications")
-    monkeypatch.setattr(config, "DRAFTS", tmp_path / "drafts")
 
     assert config.resume_target("factbase") == tmp_path / "facts.md"
-    assert config.resume_target("JK.md") == tmp_path / "JK.md"
+    assert config.resume_target("이력서.md") == tmp_path / "이력서.md"
     assert config.resume_target("applications/foo/0_JD.md") == \
         tmp_path / "applications" / "foo" / "0_JD.md"
-    assert config.resume_target("drafts/x.md") == tmp_path / "drafts" / "x.md"
 
-    for bad in ("../etc/passwd", "applications/foo/evil.sh", "applications/../x/0_JD.md"):
+    for bad in ("../etc/passwd", "applications/foo/evil.sh", "applications/../x/0_JD.md",
+                "drafts/x.md", "JK.md"):
         with pytest.raises(ValueError):
             config.resume_target(bad)
 
@@ -416,32 +421,60 @@ def test_git_revert_restores_and_commits(tmp_path, monkeypatch):
     _init_repo(tmp_path)
     jobfeed = tmp_path / "jobfeed"
     jobfeed.mkdir()
-    jk = tmp_path / "JK.md"
-    jk.write_text("v1")
-    subprocess.run(["git", "-C", str(tmp_path), "add", "JK.md"], check=True)
+    resume_file = tmp_path / "이력서.md"
+    resume_file.write_text("v1")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "이력서.md"], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "v1"],
                    check=True, capture_output=True)
     v1_sha = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
                             capture_output=True, text=True).stdout.strip()
-    jk.write_text("v2")
-    subprocess.run(["git", "-C", str(tmp_path), "add", "JK.md"], check=True)
+    resume_file.write_text("v2")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "이력서.md"], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "v2"],
                    check=True, capture_output=True)
 
     monkeypatch.setattr(io_acts, "JOBFEED", jobfeed)
-    monkeypatch.setattr(config, "JK_MD", jk)
+    monkeypatch.setattr(config, "RESUME", resume_file)
 
-    io_acts.git_revert("JK.md", v1_sha)
+    io_acts.git_revert("이력서.md", v1_sha)
 
-    assert jk.read_text() == "v1"
+    assert resume_file.read_text() == "v1"
     log = subprocess.run(["git", "-C", str(tmp_path), "log", "--oneline"],
                          capture_output=True, text=True).stdout
     assert log.count("\n") == 3   # v1 + v2 + 되돌리기 커밋 (원격 없어 push는 생략)
 
 
+def test_git_revert_follows_rename(tmp_path, monkeypatch):
+    """이름을 바꾸기 전 커밋으로도 되돌린다 — 읽기는 옛 이름, 되쓰기·커밋은 현재 이름."""
+    _init_repo(tmp_path)
+    jobfeed = tmp_path / "jobfeed"
+    jobfeed.mkdir()
+    (tmp_path / "JK.md").write_text("v1")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "JK.md"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "v1"],
+                   check=True, capture_output=True)
+    v1_sha = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                            capture_output=True, text=True).stdout.strip()
+    subprocess.run(["git", "-C", str(tmp_path), "mv", "JK.md", "이력서.md"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "이름 변경"],
+                   check=True, capture_output=True)
+    resume_file = tmp_path / "이력서.md"
+    resume_file.write_text("v2")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "이력서.md"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "v2"],
+                   check=True, capture_output=True)
+
+    monkeypatch.setattr(io_acts, "JOBFEED", jobfeed)
+    monkeypatch.setattr(config, "RESUME", resume_file)
+
+    io_acts.git_revert("이력서.md", v1_sha)
+
+    assert resume_file.read_text() == "v1"
+
+
 def test_git_revert_rejects_bad_sha():
     with pytest.raises(ValueError):
-        io_acts.git_revert("JK.md", "; rm -rf /")
+        io_acts.git_revert("이력서.md", "; rm -rf /")
 
 
 def test_reindex_facts_delegates_to_index_es(monkeypatch):
@@ -469,12 +502,12 @@ def test_listed_target_from_candidates(tmp_path, monkeypatch):
 
 def test_chat_load_creates_session(tmp_path, monkeypatch):
     monkeypatch.setattr(io_acts, "CHAT_DIR", tmp_path / "chat")
-    jk = tmp_path / "JK.md"
-    jk.write_text("원문 내용")
-    monkeypatch.setattr(config, "JK_MD", jk)
+    resume_file = tmp_path / "이력서.md"
+    resume_file.write_text("원문 내용")
+    monkeypatch.setattr(config, "RESUME", resume_file)
 
     sid = "a" * 12
-    s = io_acts.chat_load(sid, "JK.md")
+    s = io_acts.chat_load(sid, "이력서.md")
     assert s["doc"] == s["base_doc"] == "원문 내용"
     assert s["turns"] == []
     assert (tmp_path / "chat" / f"{sid}.json").exists()   # 디스크에 남아 탭을 닫아도 살아남는다
@@ -483,16 +516,16 @@ def test_chat_load_creates_session(tmp_path, monkeypatch):
 def test_chat_load_rejects_bad_sid(tmp_path, monkeypatch):
     monkeypatch.setattr(io_acts, "CHAT_DIR", tmp_path / "chat")
     with pytest.raises(ValueError):
-        io_acts.chat_load("../../etc", "JK.md")
+        io_acts.chat_load("../../etc", "이력서.md")
 
 
 def test_chat_append_applies_and_skips(tmp_path, monkeypatch):
     monkeypatch.setattr(io_acts, "CHAT_DIR", tmp_path / "chat")
-    jk = tmp_path / "JK.md"
-    jk.write_text("문장 하나. 문장 둘. 문장 둘.")
-    monkeypatch.setattr(config, "JK_MD", jk)
+    resume_file = tmp_path / "이력서.md"
+    resume_file.write_text("문장 하나. 문장 둘. 문장 둘.")
+    monkeypatch.setattr(config, "RESUME", resume_file)
     sid = "b" * 12
-    io_acts.chat_load(sid, "JK.md")
+    io_acts.chat_load(sid, "이력서.md")
 
     out = {"reply": "답변", "edits": [
         {"current": "문장 하나", "proposed": "문장 하나 수정", "why": "정상"},
@@ -508,13 +541,13 @@ def test_chat_append_applies_and_skips(tmp_path, monkeypatch):
 
 def test_chat_save_rejects_changed_file(tmp_path, monkeypatch):
     monkeypatch.setattr(io_acts, "CHAT_DIR", tmp_path / "chat")
-    jk = tmp_path / "JK.md"
-    jk.write_text("원문")
-    monkeypatch.setattr(config, "JK_MD", jk)
+    resume_file = tmp_path / "이력서.md"
+    resume_file.write_text("원문")
+    monkeypatch.setattr(config, "RESUME", resume_file)
     sid = "c" * 12
-    io_acts.chat_load(sid, "JK.md")
+    io_acts.chat_load(sid, "이력서.md")
 
-    jk.write_text("세션 시작 후 밖에서 고쳐짐")   # ResumeSync·apply_resume 등이 중간에 건드린 상황
+    resume_file.write_text("세션 시작 후 밖에서 고쳐짐")   # ResumeSync·apply_resume 등이 중간에 건드린 상황
     with pytest.raises(RuntimeError):
         io_acts.chat_save(sid)
 
@@ -526,16 +559,16 @@ def test_chat_save_writes_and_archives(tmp_path, monkeypatch):
     monkeypatch.setattr(io_acts, "JOBFEED", jobfeed)
     monkeypatch.setattr(io_acts, "CHAT_DIR", tmp_path / "chat")
     monkeypatch.setattr(io_acts, "CHAT_DONE", tmp_path / "chat" / "done")
-    jk = tmp_path / "JK.md"
-    jk.write_text("원문")
-    monkeypatch.setattr(config, "JK_MD", jk)
+    resume_file = tmp_path / "이력서.md"
+    resume_file.write_text("원문")
+    monkeypatch.setattr(config, "RESUME", resume_file)
     sid = "d" * 12
-    io_acts.chat_load(sid, "JK.md")
+    io_acts.chat_load(sid, "이력서.md")
     out = {"reply": "답변", "edits": [{"current": "원문", "proposed": "수정본", "why": "why"}]}
     io_acts.chat_append(sid, "메시지", out)
 
     io_acts.chat_save(sid)
 
-    assert jk.read_text() == "수정본"
+    assert resume_file.read_text() == "수정본"
     assert not (tmp_path / "chat" / f"{sid}.json").exists()
     assert (tmp_path / "chat" / "done" / f"{sid}.json").exists()

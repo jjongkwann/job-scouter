@@ -69,8 +69,8 @@ def _setup_app_env(tmp_path, monkeypatch):
     monkeypatch.setattr(J, "APP_EXAMPLE", "example")
     monkeypatch.setattr(J, "FACTBASE", tmp_path / "facts.md")
     (tmp_path / "facts.md").write_text("사실")
-    monkeypatch.setattr(J, "JK_MD", tmp_path / "JK.md")
-    (tmp_path / "JK.md").write_text("JK 소개")
+    monkeypatch.setattr(J, "RESUME", tmp_path / "이력서.md")
+    (tmp_path / "이력서.md").write_text("이력서 소개")
 
 
 def test_draft_application_splits_5_files(tmp_path, monkeypatch):
@@ -96,11 +96,11 @@ def test_draft_application_raises_if_fewer_than_5(tmp_path, monkeypatch):
         J.draft_application("회사", "포지션", "공고 전문")
 
 
-def test_propose_resume_update_reads_factbase_and_jk_and_uses_schema(tmp_path, monkeypatch):
+def test_propose_resume_update_reads_factbase_and_resume_and_uses_schema(tmp_path, monkeypatch):
     monkeypatch.setattr(J, "FACTBASE", tmp_path / "facts.md")
     (tmp_path / "facts.md").write_text("## 경력\n\n3년차 백엔드")
-    monkeypatch.setattr(J, "JK_MD", tmp_path / "JK.md")
-    (tmp_path / "JK.md").write_text("JK 소개")
+    monkeypatch.setattr(J, "RESUME", tmp_path / "이력서.md")
+    (tmp_path / "이력서.md").write_text("이력서 소개")
     called = []
 
     def fake_claude(prompt, system, max_usd, schema=None, timeout=240):
@@ -116,7 +116,7 @@ def test_propose_resume_update_reads_factbase_and_jk_and_uses_schema(tmp_path, m
                     "current": "3년차 백엔드", "proposed": "4년차 백엔드",
                     "evidence": "PKB: 경력노트"}]
     prompt, system, max_usd, schema = called[0]
-    assert "3년차 백엔드" in system and "JK 소개" in system   # 사실베이스·JK.md를 직접 읽음
+    assert "3년차 백엔드" in system and "이력서 소개" in system   # 사실베이스·이력서.md를 직접 읽음
     assert "PKB 발췌 텍스트" in prompt
     assert schema is J.RESUME_SCHEMA
     assert "id" not in out[0]   # id는 io_acts가 부여

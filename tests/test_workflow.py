@@ -114,8 +114,8 @@ async def fake_draft_application(company: str, title: str, posting: str) -> dict
 
 
 @activity.defn(name="write_application")
-async def fake_write_application(company: str, files: dict) -> str:
-    return f"applications/{company}"
+async def fake_write_application(target: dict, files: dict) -> str:
+    return f"applications/{target['company']}"
 
 
 @activity.defn(name="listed_target")

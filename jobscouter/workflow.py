@@ -31,7 +31,7 @@ async def _draft(target: dict) -> str:
     files = await workflow.execute_activity(
         "draft_application", args=[target["company"], target["title"], posting], **_DRAFT_OPTS)
     return await workflow.execute_activity(
-        "write_application", args=[target["company"], files], **_IO_OPTS)
+        "write_application", args=[target, files], **_IO_OPTS)
 
 
 @workflow.defn
@@ -273,7 +273,7 @@ class RevertFile:
 
 @workflow.defn
 class ApplyResume:
-    """웹앱 승인 버튼이 시작. 사실베이스·JK.md에 승인 항목 반영 → 사실 재색인."""
+    """웹앱 승인 버튼이 시작. 사실베이스·이력서.md에 승인 항목 반영 → 사실 재색인."""
 
     def __init__(self) -> None:
         self._stage = "시작"

@@ -11,7 +11,8 @@ from temporalio import activity
 
 from jobscouter.config import (APP_FILES, APPLICATIONS, CHAT_DIR, CHAT_DONE, JOBFEED,
                                 PKB_CATEGORIES, PKB_INDEX, PKB_STATUSES, PROPOSALS, PY,
-                                RESUME_PROPOSALS, SID_RE, Target, _app_slug, _norm, resume_target)
+                                RESUME_PROPOSALS, SID_RE, Target, _app_slug, _norm, git_path_at,
+                                job_cid, resume_target)
 from jobscouter.search import es
 
 
@@ -108,7 +109,7 @@ def load_targets() -> list[Target]:
     out, seen = [], set()
     for line in (JOBFEED / "jobs.jsonl").read_text().splitlines():
         j = json.loads(line)
-        cid = str(j["id"]) if j["src"] == "wanted" else f"j{j['id']}"
+        cid = job_cid(j)
         if cid in known or cid in seen or _norm(j["company"]) in bad:
             continue
         seen.add(cid)
@@ -296,10 +297,14 @@ def reject_proposals(rejects: list[dict]) -> int:
 
 
 @activity.defn
-def write_application(company: str, files: dict[str, str]) -> str:
-    """지원서류 5종(files) + README(파일 목록·체크리스트 스텁)을
+def write_application(target: dict, files: dict[str, str]) -> str:
+    """지원서류 5종(files) + README(공고 링크·파일 목록·체크리스트 스텁)을
     applications/{slug}/에 쓴다. 이미 사람이 작업 중인 폴더는 덮어쓰지 않고
-    `_draft` 접미로 비켜 쓴다. commit+push."""
+    `_draft` 접미로 비켜 쓴다. commit+push.
+
+    README 첫 줄의 `공고:` URL이 **후보목록과의 유일한 연결 키**다 — 폴더명(회사명 slug)은
+    사람이 영문으로 바꿔 두는 일이 잦아 회사명으로는 못 잇는다(web.job_index 참조)."""
+    company = target["company"]
     slug = _app_slug(company)   # 정규식이 경로 문자를 전부 제거 — 탈출 불가
     files = {n: c for n, c in files.items() if n in APP_FILES}  # LLM이 준 파일명은 allowlist만
     if len(files) < len(APP_FILES):
@@ -311,7 +316,9 @@ def write_application(company: str, files: dict[str, str]) -> str:
     for name, content in files.items():
         (folder / name).write_text(content)
     readme = (
-        f"# {company} 지원서류\n\n상태: 초안 (자동 생성 {date.today().isoformat()})\n\n"
+        f"# {company} 지원서류\n\n"
+        f"공고: {target['url']}\n"
+        f"상태: 초안 (자동 생성 {date.today().isoformat()})\n\n"
         "## 파일\n" + "\n".join(f"- {n}" for n in sorted(files)) +
         "\n\n## 지원 전 체크리스트\n"
         "- [ ] 사실베이스 대조 — 초안의 수치·경력이 사실과 일치하는지 확인\n"
@@ -387,7 +394,7 @@ def save_resume_proposals(items: list[dict], hash: str) -> int:
 
 @activity.defn
 def apply_resume(ids: list[str]) -> str:
-    """승인 항목을 사실베이스·JK.md에 반영. change=current를 proposed로 정확 치환,
+    """승인 항목을 사실베이스·이력서.md에 반영. change=current를 proposed로 정확 치환,
     add=대상 파일 끝 `## 미분류 추가(자동 제안 승인)` 절에 append, remove=current 삭제.
     원문 불일치 등 실패 항목은 건너뛰고 보고. 반영분은 proposals에서 제거. commit+push."""
     path = JOBFEED / RESUME_PROPOSALS
@@ -432,7 +439,7 @@ def apply_resume(ids: list[str]) -> str:
     remaining = [it for it in items if it["id"] not in applied]
     path.write_text(json.dumps({**data, "items": remaining}, ensure_ascii=False, indent=1))
     paths = [str(p.relative_to(JOBFEED.parent))
-             for p in {resume_target("factbase"), resume_target("JK.md")}] \
+             for p in {resume_target("factbase"), resume_target("이력서.md")}] \
         + [f"jobfeed/{RESUME_PROPOSALS}"]
     _commit_and_push(paths, f"resume: 자동 제안 반영 {len(applied)}건")
 
@@ -454,7 +461,8 @@ def git_revert(key: str, sha: str) -> str:
     path = resume_target(key)
     rel = str(path.relative_to(JOBFEED.parent))  # 정상 배치에서는 FACTBASE도 이 안쪽 — 밖이면 ValueError
     repo = str(JOBFEED.parent)
-    r = subprocess.run(["git", "-C", repo, "show", f"{sha}:{rel}"],
+    # 이름을 바꾸기 전 커밋은 옛 이름으로만 읽힌다 — 되쓰기·커밋은 현재 이름(rel)으로 한다
+    r = subprocess.run(["git", "-C", repo, "show", f"{sha}:{git_path_at(repo, sha, rel)}"],
                        capture_output=True, text=True, timeout=20)
     if r.returncode != 0:
         raise RuntimeError(f"git show 실패\n{r.stderr}")
