@@ -317,6 +317,16 @@ _LISTED = _jenv.from_string("""
 {% else %}<div class="empty">등재된 공고 없음</div>{% endfor %}
 </div>""")
 
+_NOTICE = _jenv.from_string("""
+<div class="notice bad"><b>저장하지 못했습니다.</b> {{ cause }}</div>
+{% if conflict %}<p class="sub">대상 문서가 대화를 시작한 뒤에 바뀌었습니다(다른 창에서 수정했거나
+ResumeSync 반영이 있었을 수 있습니다). <b>덮어쓰지 않고 멈췄으니 두 수정 모두 그대로 있습니다.</b>
+바뀐 내용을 확인한 뒤, 이 대화는 버리고 새로 시작하는 편이 안전합니다.</p>{% endif %}
+<div class="bar"><a class="pill" href="/resume/chat/{{ sid }}?key={{ key }}">대화로 돌아가기</a>
+<a class="pill" href="/resume/history?key={{ key }}">문서 이력 보기</a>
+<a class="pill" href="/resume">이력서</a></div>""")
+
+
 _DOCS = _jenv.from_string("""
 {% if sections %}{% if sections|length > 1 %}<div class="bar"><span class="lbl">문서</span>
 {% for name, html in sections %}<a class="pill" href="#{{ loop.index }}">{{ name }}</a>{% endfor %}</div>{% endif %}
@@ -803,7 +813,17 @@ async def resume_chat_end(sid: str, request: Request):
     if not SID_RE.fullmatch(sid):
         raise HTTPException(400, "잘못된 세션 id")
     form = await request.form()
-    await end_chat(sid, form.get("save") == "1")
+    try:
+        await end_chat(sid, form.get("save") == "1")
+    except Exception as e:
+        # 저장 거부(대상 파일이 세션 중 바뀜)가 여기로 온다. 세션 버퍼는 그대로 남아 있으므로
+        # 스택트레이스 500 대신 이유와 다음 행동을 보여준다 — 2026-08-27 라이브 검증에서 발견.
+        cause = str(e).split("\n")[0][:200]
+        s = load_chat(sid) or {}
+        body = _NOTICE.render(
+            cause=cause, sid=sid, key=s.get("target", ""),
+            conflict="세션 시작 후" in cause)
+        return _render("저장 실패", body, active="이력서", sub="")
     return RedirectResponse("/resume", status_code=302)
 
 

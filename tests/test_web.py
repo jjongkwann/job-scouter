@@ -336,6 +336,29 @@ def test_chat_post_starts_workflow(client, monkeypatch):
     assert calls == [(sid, "JK.md", "경력 3년으로")]   # 빈 메시지는 워크플로를 시작하지 않는다
 
 
+def test_chat_end_shows_reason_instead_of_500(client, monkeypatch, tmp_path):
+    """저장 거부(해시 게이트)가 스택트레이스 500이 아니라 이유와 다음 행동을 보여줘야 한다.
+    2026-08-27 라이브 검증에서 맨 500이 뜨는 걸 발견해 추가."""
+    sid = "a1b2c3d4e5f6"
+    chat = tmp_path / "chat"
+    chat.mkdir()
+    (chat / f"{sid}.json").write_text(json.dumps(
+        {"sid": sid, "target": "JK.md", "base_sha256": "x", "base_doc": "a",
+         "doc": "b", "turns": [], "created": "2026-08-27"}, ensure_ascii=False))
+    monkeypatch.setattr(web, "CHAT_DIR", chat)
+
+    async def boom(sid, save):
+        raise RuntimeError("대상 파일이 세션 시작 후 바뀌었습니다 — 저장 취소")
+
+    monkeypatch.setattr(web, "end_chat", boom)
+    r = client.post(f"/resume/chat/{sid}/end", data={"save": "1"}, follow_redirects=False)
+    assert r.status_code == 200
+    assert "저장하지 못했습니다" in r.text
+    assert "세션 시작 후" in r.text
+    assert f"/resume/chat/{sid}" in r.text        # 대화로 돌아가는 길
+    assert "/resume/history?key=JK.md" in r.text  # 무엇이 바뀌었는지 보는 길
+
+
 def test_chat_end_save_and_discard(client, monkeypatch):
     calls = []
 
