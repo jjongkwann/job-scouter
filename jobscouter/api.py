@@ -301,10 +301,13 @@ async def latest_publish() -> dict | None:
         info["ids"] = [str(i) for i in params.get("ids") or []]
         info["reject_ids"] = [str(r["id"]) for r in params.get("rejects") or []]
     elif info["status"] == "FAILED":
-        try:
-            await handle.result()
-        except Exception as e:
-            info["error"] = _root_cause(e)
+        if info["id"] not in _ERRORS:          # 실패 원인은 불변 — 틱마다 result() RPC를 반복하지 않는다
+            try:
+                await handle.result()
+                _ERRORS[info["id"]] = ""
+            except Exception as e:
+                _ERRORS[info["id"]] = _root_cause(e)
+        info["error"] = _ERRORS[info["id"]]
     return info
 
 
@@ -320,6 +323,9 @@ def _wf_row(wid: str, wtype: str, status: str, start) -> dict:
             "start": start.astimezone(KST).strftime("%Y-%m-%d %H:%M") if start else ""}
 
 
+_ERRORS: dict[str, str] = {}   # FAILED 워크플로 id → 원인 (SSE 틱마다 재조회 방지)
+
+
 async def _fill(client, info: dict) -> dict:
     """RUNNING이면 stage 쿼리, FAILED면 실패 원인 — 둘 다 실패해도 행은 그대로 낸다."""
     handle = client.get_workflow_handle(info["id"])
@@ -329,10 +335,13 @@ async def _fill(client, info: dict) -> dict:
         except Exception:
             pass
     elif info["status"] == "FAILED":
-        try:
-            await handle.result()
-        except Exception as e:
-            info["error"] = _root_cause(e)
+        if info["id"] not in _ERRORS:          # 실패 원인은 불변 — 틱마다 result() RPC를 반복하지 않는다
+            try:
+                await handle.result()
+                _ERRORS[info["id"]] = ""
+            except Exception as e:
+                _ERRORS[info["id"]] = _root_cause(e)
+        info["error"] = _ERRORS[info["id"]]
     return info
 
 
