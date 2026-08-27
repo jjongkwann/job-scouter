@@ -23,6 +23,7 @@ def repo(tmp_path, monkeypatch):
         ["백엔드", "테스트회사", 222, [30, 18, 20, 16, -5], ["good", 3.9, 80, 4.1, "메모"], "", ["prep"], "2999-01-01", "서울 강남구 테헤란로"],
         ["플랫폼", "다른회사", "j5", [20, 15, 15, 12], None, "정보 없음", [], "closed", "경기 부천시"],
         ["데이터", "세번째", 333, [35, 25, 20, 20], ["bad", 2.1, 50, 2.0, "회피"], "", [], None, None],
+        ["기한지남", "네번째", 444, [35, 25, 20, 20], None, "정보 없음", [], "2000-01-01", None],
     ], "skipped": {}}, ensure_ascii=False))
     (jobfeed / "기업평판.md").write_text("| 회사 | 총점 | 리뷰 | 판정 |\n|---|---|---|---|\n| 테스트회사 | 3.9 | 80 | ✅ |\n| 다른회사 | 2.0 | 5 | 🚫 |\n")
     (jobfeed / "jobs.jsonl").write_text(json.dumps({"src": "wanted", "id": 222, "due": "2999-01-01"}) + "\n")
@@ -70,6 +71,7 @@ def test_candidate_rows_rec_rank_due(repo):
     assert c["rec"] == round(100 * 0.65 + 0)                            # bad 계수, 주소 없음 → 미확인 0
     assert b["closed"] and b["rank"] is None and b["due_cls"] == "gone"
     assert a["rank"] == 1 and c["rank"] == 2
+    assert rows["444"]["rank"] is None and rows["444"]["due_cls"] == "gone"   # 기한 지난 공고는 순위 밖
     assert a["days_left"] > 0 and b["days_left"] is None and c["days_left"] is None
     assert a["url"] == "https://www.wanted.co.kr/wd/222"
     assert b["url"] == "https://jumpit.saramin.co.kr/position/5"
