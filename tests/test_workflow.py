@@ -22,10 +22,16 @@ async def fake_sync_repo() -> str:
     return "원격 없음 — 동기화 생략"
 
 
-@activity.defn(name="run_script")
-async def fake_run_script(name: str) -> str:
-    RAN.append(name)
-    return f"ok:{name}"
+@activity.defn(name="fetch_jobs")
+async def fake_fetch_jobs() -> str:
+    RAN.append("fetch_jobs")
+    return "ok"
+
+
+@activity.defn(name="refresh_due")
+async def fake_refresh_due() -> str:
+    RAN.append("refresh_due")
+    return "ok"
 
 
 @activity.defn(name="load_targets")
@@ -124,10 +130,10 @@ async def fake_listed_target(cid: str) -> dict:
             "url": f"https://www.wanted.co.kr/wd/{cid}"}
 
 
-_SCAN_ACTS = [fake_sync_repo, fake_run_script, fake_load_targets, fake_fetch_requirements,
+_SCAN_ACTS = [fake_sync_repo, fake_fetch_jobs, fake_load_targets, fake_fetch_requirements,
              fake_search_context, fake_judge, fake_save_proposals]
 _PUB_ACTS = [fake_sync_repo, fake_load_proposals, fake_commit_rows, fake_reject_proposals,
-            fake_save_proposals, fake_run_script, fake_report, fake_commit_outputs,
+            fake_save_proposals, fake_refresh_due, fake_report, fake_commit_outputs,
             fake_fetch_posting_full, fake_draft_application, fake_write_application]
 
 
@@ -168,7 +174,7 @@ async def test_daily_scan_saves_non_excluded():
         RAN.clear()
         SAVED.clear()
         out = await _run_scan(env.client)
-        assert RAN == ["fetch_jobs.py"]
+        assert RAN == ["fetch_jobs"]
         assert out["judged"] == 4
         assert out["excluded"] == 2
         assert out["demoted"] == 0
@@ -199,7 +205,7 @@ async def test_daily_scan_no_targets_skips_judge_but_cleans_proposals():
         SAVED.clear()
         q = f"test-{uuid.uuid4()}"
         async with Worker(env.client, task_queue=q, workflows=[DailyScan],
-                          activities=[fake_sync_repo, fake_run_script,
+                          activities=[fake_sync_repo, fake_fetch_jobs,
                                       fake_load_targets_empty, fake_save_proposals],
                           workflow_runner=UnsandboxedWorkflowRunner()):
             import jobscouter.workflow as wf
@@ -226,7 +232,7 @@ async def test_publish_commits_approved_and_rejects():
             PublishParams(ids=["p0"], rejects=[{"id": "p1", "why": "연봉 미공개"}]))
         assert COMMITTED == ["p0"]
         assert REJECTED == [{"id": "p1", "why": "연봉 미공개"}]
-        assert RAN == ["refresh_due.py", "build.py"]
+        assert RAN == ["refresh_due"]
         assert out["commit"] == "등재 1건"
         assert out["reject"] == 1
         assert out["report"]
@@ -369,7 +375,7 @@ async def test_running_handle_finds_cycle():
     try:
         q = f"test-{uuid.uuid4()}"
         async with Worker(env.client, task_queue=q, workflows=[DailyScan],
-                          activities=[fake_sync_repo, fake_run_script, fake_load_targets_slow,
+                          activities=[fake_sync_repo, fake_fetch_jobs, fake_load_targets_slow,
                                       fake_fetch_requirements, fake_search_context,
                                       fake_judge, fake_save_proposals],
                           workflow_runner=UnsandboxedWorkflowRunner()):

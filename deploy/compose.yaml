@@ -24,7 +24,6 @@ services:
       JOBSCOUTER_JOBFEED: /work/repo/jobfeed
       JOBSCOUTER_FACTBASE: /work/repo/references/이력서_사실베이스.md
       JOBSCOUTER_PROMPTS: /work/repo/job-scouter/prompts
-      JOBSCOUTER_PY: /app/.venv/bin/python
       GIT_COMMITTER_NAME: ${GIT_AUTHOR_NAME}   # git commit엔 AUTHOR·COMMITTER 둘 다 필요
       GIT_COMMITTER_EMAIL: ${GIT_AUTHOR_EMAIL}
     volumes:
@@ -49,7 +48,6 @@ services:
       JOBSCOUTER_JOBFEED: /work/repo/jobfeed
       JOBSCOUTER_FACTBASE: /work/repo/references/이력서_사실베이스.md
       JOBSCOUTER_PROMPTS: /work/repo/job-scouter/prompts
-      JOBSCOUTER_PY: /app/.venv/bin/python
     volumes:
       - ${DATA_REPO}:/work/repo
       - jobscouter-data:/app/data
@@ -75,7 +73,6 @@ services:
       JOBSCOUTER_JOBFEED: /work/repo/jobfeed
       JOBSCOUTER_FACTBASE: /work/repo/references/이력서_사실베이스.md
       JOBSCOUTER_PROMPTS: /work/repo/job-scouter/prompts
-      JOBSCOUTER_PY: /app/.venv/bin/python
     volumes:
       - ${DATA_REPO}:/work/repo
     restart: always

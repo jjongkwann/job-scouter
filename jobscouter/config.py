@@ -3,7 +3,6 @@ import json
 import os
 import re
 import subprocess
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -11,15 +10,13 @@ _env = os.environ.get
 ROOT = Path(__file__).parent.parent
 TEMPORAL = _env("JOBSCOUTER_TEMPORAL", "localhost:7233")
 ES_URL = _env("JOBSCOUTER_ES", "http://localhost:9200")
-# jobfeed = fetch_jobs.py·refresh_due.py·build.py·candidates.json·jobs.jsonl·기업평판.md가 있는 곳
+# jobfeed = candidates.json·jobs.jsonl·기업평판.md가 있는 곳
 JOBFEED = Path(_env("JOBSCOUTER_JOBFEED", str(ROOT / "jobfeed")))
 # 사실베이스 = 판정 근거가 되는 본인 확인 완료 경력 사실 (개인 문서 — 저장소 밖)
 FACTBASE = Path(_env("JOBSCOUTER_FACTBASE", str(JOBFEED.parent / "이력서_사실베이스.md")))
 # 루브릭 프롬프트 = 개인 채점 기준 (저장소 밖). prompts/rubric_v1.example.md가 템플릿
 PROMPTS = Path(_env("JOBSCOUTER_PROMPTS", str(ROOT / "prompts")))
 DATA = ROOT / "data"
-# jobfeed 스크립트 인터프리터 — certifi가 있는 파이썬이어야 원티드 API가 붙는다
-PY = _env("JOBSCOUTER_PY", sys.executable)
 Q_WF, Q_IO, Q_LLM = "jobscout-wf", "jobscout-io", "jobscout-llm"
 Q_CHAT = "jobscout-chat"                       # 판정 레이트리밋과 분리 — 채팅이 판정 뒤에 안 밀리게
 JUDGE_MODEL = _env("JOBSCOUTER_MODEL", "claude-sonnet-5")

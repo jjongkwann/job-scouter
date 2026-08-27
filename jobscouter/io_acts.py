@@ -1,4 +1,4 @@
-"""io 큐 activity — 자격증명 없음. jobfeed 스크립트 subprocess + 공개 API."""
+"""io 큐 activity — 자격증명 없음. 공개 API + git."""
 import hashlib
 import json
 import re
@@ -10,13 +10,12 @@ from datetime import date
 from temporalio import activity
 
 from jobscouter.config import (APP_FILES, APPLICATIONS, CHAT_DIR, CHAT_DONE, JOBFEED,
-                                PKB_CATEGORIES, PKB_INDEX, PKB_STATUSES, PROPOSALS, PY,
+                                PKB_CATEGORIES, PKB_INDEX, PKB_STATUSES, PROPOSALS,
                                 RESUME_PROPOSALS, SID_RE, Target, _app_slug, _norm, git_path_at,
                                 job_cid, resume_target)
 from jobscouter.search import es
 
 
-SCRIPTS = {"fetch_jobs.py", "refresh_due.py", "build.py"}
 # proposals.json에 남기는 필드 — usage·exclude·cached는 판정 내부용이라 뺀다
 PROP_FIELDS = ["id", "company", "title", "url", "src", "scores", "total",
                "reason", "quotes", "confidence", "rubric_version"]
@@ -79,19 +78,6 @@ def sync_repo() -> str:
         tail = "\n".join(out.splitlines()[-6:])
         raise RuntimeError(f"git pull exit {r.returncode}\n{tail}")
     return out.splitlines()[-1] if out else "완료"
-
-
-@activity.defn
-def run_script(name: str) -> str:
-    """jobfeed 스크립트 하나를 돌리고 출력 꼬리를 돌려준다."""
-    if name not in SCRIPTS:  # activity 인자가 subprocess 경로로 흘러간다 — allowlist로 차단
-        raise ValueError(f"허용되지 않은 스크립트: {name}")
-    r = subprocess.run([PY, str(JOBFEED / name)], capture_output=True, text=True,
-                       timeout=540, cwd=JOBFEED)
-    tail = "\n".join((r.stdout + r.stderr).strip().splitlines()[-6:])
-    if r.returncode != 0:
-        raise RuntimeError(f"{name} exit {r.returncode}\n{tail}")
-    return tail
 
 
 @activity.defn
@@ -333,7 +319,7 @@ def write_application(target: dict, files: dict[str, str]) -> str:
 
 @activity.defn
 def commit_outputs() -> str:
-    """Publish 마지막 — refresh_due·build 산출물(candidates.json·reports/)을 커밋."""
+    """Publish 마지막 — refresh_due 산출물(candidates.json·reports/)을 커밋."""
     names = [n for n in ("candidates.json", "reports") if (JOBFEED / n).exists()]
     if not names:
         return "변경 없음"

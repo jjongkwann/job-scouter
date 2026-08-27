@@ -41,10 +41,10 @@ async def main() -> None:
     client = await Client.connect(TEMPORAL)
 
     if cmd == "io":
-        from jobscouter import io_acts, search
+        from jobscouter import io_acts, jobfeed, search
         from jobscouter.workflow import (ApplyResume, DailyScan, Draft, EndChat, Publish,
                                          ResumeChat, ResumeSync, RevertFile)
-        acts = [io_acts.run_script, io_acts.load_targets,
+        acts = [io_acts.load_targets,
                 io_acts.fetch_requirements, io_acts.commit_rows,
                 io_acts.sync_repo, io_acts.save_proposals,
                 io_acts.load_proposals, io_acts.reject_proposals, io_acts.listed_target,
@@ -53,7 +53,8 @@ async def main() -> None:
                 io_acts.pkb_snapshot, io_acts.resume_state_hash,
                 io_acts.save_resume_proposals, io_acts.apply_resume,
                 io_acts.reindex_facts, io_acts.git_revert,
-                io_acts.chat_load, io_acts.chat_append, io_acts.chat_save, io_acts.chat_discard]
+                io_acts.chat_load, io_acts.chat_append, io_acts.chat_save, io_acts.chat_discard,
+                jobfeed.fetch_jobs, jobfeed.refresh_due]
         ex = ThreadPoolExecutor(4)
         workers = [
             Worker(client, task_queue=Q_WF,

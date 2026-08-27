@@ -73,7 +73,7 @@ class DailyScan:
         await workflow.execute_activity("sync_repo", **_IO_OPTS)
 
         self._stage = "fetch"
-        await workflow.execute_activity("run_script", "fetch_jobs.py", **_IO_OPTS)
+        await workflow.execute_activity("fetch_jobs", **_IO_OPTS)
 
         self._stage = "대상 선정"
         targets = await workflow.execute_activity("load_targets", **_IO_OPTS)
@@ -89,7 +89,7 @@ class DailyScan:
         spent = 0
         for i in range(0, len(targets), params.chunk):
             if spent >= params.budget_tokens:
-                # 우아한 강등 — 판정 없이 미점수로 남긴다 (build.py가 집계·보고)
+                # 우아한 강등 — 판정 없이 미점수로 남긴다
                 self._demoted = [t["id"] for t in targets[i:]]
                 break
             batch = targets[i:i + params.chunk]
@@ -166,10 +166,7 @@ class Publish:
 
         self._stage = "refresh"
         out["refresh"] = await workflow.execute_activity(
-            "run_script", "refresh_due.py", **_IO_OPTS)
-        self._stage = "build"
-        out["build"] = await workflow.execute_activity(
-            "run_script", "build.py", **_IO_OPTS)
+            "refresh_due", **_IO_OPTS)
 
         self._stage = "지원서류 초안"
         drafts: dict[str, str] = {}

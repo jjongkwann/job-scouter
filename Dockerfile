@@ -11,9 +11,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN npm install -g @anthropic-ai/claude-code
 RUN pip install --no-cache-dir uv
 
-# jobfeed 스크립트의 macOS 알림(osascript)은 리눅스에 없다 — no-op 심으로 스크립트 무수정 유지
-RUN printf '#!/bin/sh\nexit 0\n' > /usr/local/bin/osascript && chmod +x /usr/local/bin/osascript
-
 # 호스트의 ~/.git-credentials(ro 마운트)로 candidates.json push 인증
 RUN git config --system credential.helper store && git config --system safe.directory "*"   # 마운트된 repo는 호스트 소유
 
