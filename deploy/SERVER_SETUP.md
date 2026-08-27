@@ -5,6 +5,17 @@
 컨테이너는 `host.docker.internal`로 붙는다. jobfeed 데이터는 GitHub private repo를
 서버 호스트에 clone해 컨테이너에 마운트한다.
 
+## 0. 코드 clone (서버 호스트)
+
+서버는 이 저장소를 clone해서 쓴다 — 어떤 리비전이 돌고 있는지 `git log`로 확인되고,
+갱신이 `git pull`로 끝난다. rsync로 밀어 넣지 않는다.
+
+```bash
+git clone https://github.com/<org>/job-scouter.git ~/workspace/job-scouter
+```
+
+`deploy/.env`는 gitignore 대상이라 clone에 딸려오지 않는다 — 2절에서 만든다.
+
 ## 1. 데이터 repo clone (서버 호스트)
 
 ```bash
@@ -80,5 +91,15 @@ uv run python -m jobscouter.worker resume-sync     # 수동 이력서 갱신 제
 ```
 
 작업 머신 `.env`의 `JOBSCOUTER_TEMPORAL=<server-ip>:7233`으로 서버를 가리키면
-로컬 워커 없이 위 명령이 동작한다. 코드 갱신 시 서버에서
-`docker compose -f deploy/compose.yaml up -d --build io llm web`.
+로컬 워커 없이 위 명령이 동작한다 — 스케줄 등록도 작업 머신에서 한 번 하면 되고,
+서버에 접속할 필요가 없다(Temporal 클라이언트 호출이라서).
+
+코드 갱신은 서버에서:
+
+```bash
+cd ~/workspace/job-scouter && git pull
+docker compose -f deploy/compose.yaml up -d --build io llm web
+```
+
+`temporal` 컨테이너는 재기동하지 않는다 — 워크플로 이력이 SQLite에 있고, 워커만
+새 이미지로 바뀌면 대기 중인 워크플로가 그대로 이어진다.
