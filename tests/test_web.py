@@ -7,6 +7,7 @@ from urllib.parse import unquote
 import pytest
 from fastapi.testclient import TestClient
 
+import jobscouter.candidates as cands
 import jobscouter.web as web
 from jobscouter import config
 
@@ -63,6 +64,7 @@ def repo(tmp_path, monkeypatch):
     (drafts / "old.md").write_text("# 옛날 초안\n\n버려진 초안 본문")
 
     monkeypatch.setattr(web, "JOBFEED", jobfeed)
+    monkeypatch.setattr(cands, "JOBFEED", jobfeed)
     monkeypatch.setattr(web, "RESUME", tmp_path / "이력서.md")
     apps = tmp_path / "applications"
     (apps / "test_co").mkdir(parents=True)
@@ -74,6 +76,7 @@ def repo(tmp_path, monkeypatch):
     (apps / "no_link" / "README.md").write_text("# 링크 없는 폴더\n\n공고 주소가 없다")
 
     monkeypatch.setattr(web, "APPLICATIONS", apps)
+    monkeypatch.setattr(cands, "APPLICATIONS", apps)
     monkeypatch.setattr(web, "REFERENCES", refs)
     return tmp_path
 
@@ -252,6 +255,7 @@ def test_job_screen_shows_posting_header(client):
 
 def test_job_screen_without_folder_offers_draft(client, monkeypatch):
     monkeypatch.setattr(web, "APPLICATIONS", web.APPLICATIONS / "없는곳")
+    monkeypatch.setattr(cands, "APPLICATIONS", cands.APPLICATIONS / "없는곳")
     r = client.get("/applications/job/222")
     assert r.status_code == 200
     assert "아직 문서가 없습니다" in r.text and "초안 만들기" in r.text

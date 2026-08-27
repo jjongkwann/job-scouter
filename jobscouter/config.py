@@ -1,4 +1,5 @@
 """공유 상수·타입. 머신별 값(서버 주소·데이터 경로)은 .env로 — .env.example 참조."""
+import json
 import os
 import re
 import subprocess
@@ -42,6 +43,18 @@ PKB_STATUSES = _env("JOBSCOUTER_PKB_STATUSES", "canonical,active,evergreen,draft
 
 # 데이터 repo 레이아웃(JOBFEED.parent가 루트) — 웹앱 열람·지원서류 초안이 쓴다
 RESUME = JOBFEED.parent / "이력서.md"
+SETTINGS = JOBFEED.parent / "settings.json"   # 개인값(검색어·통근 밴드) — 데이터 repo
+
+
+def settings() -> dict:
+    """{"keywords": [...], "zones": [[밴드, 이름, 정규식], ...]}. 없거나 깨지면 빈 값 — 통근은 전부 '미확인'."""
+    try:
+        d = json.loads(SETTINGS.read_text())
+    except (OSError, ValueError):
+        d = {}
+    return {"keywords": list(d.get("keywords") or []), "zones": list(d.get("zones") or [])}
+
+
 REFERENCES = JOBFEED.parent / "references"
 APPLICATIONS = JOBFEED.parent / "applications"
 APP_EXAMPLE = _env("JOBSCOUTER_APP_EXAMPLE", "example")   # 형식 앵커 — applications/ 아래 회사 폴더명

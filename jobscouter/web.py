@@ -20,9 +20,11 @@ from jinja2 import Environment
 from markupsafe import escape
 from temporalio.client import Client
 
+from jobscouter.candidates import (MAX as _MAX, app_folders, candidate_rows, due_label as _due_label,
+                                    dues as _dues, job_index, reputation as _reputation)
 from jobscouter.config import (APP_FILES, APPLICATIONS, CHAT_DIR, JOBFEED, PROPOSALS, Q_WF,
                                 REFERENCES, RESUME, RESUME_PROPOSALS, SID_RE, TEMPORAL,
-                                PublishParams, _norm, git_path_at, job_cid, resume_target)
+                                PublishParams, _norm, git_path_at, resume_target)
 from jobscouter.workflow import ApplyResume, Draft, EndChat, Publish, ResumeChat, RevertFile
 
 # docs_url 등 기본 라우트를 끈다 — /docs는 이 앱의 문서 열람 라우트가 쓴다
@@ -585,50 +587,6 @@ def _load_proposals() -> list[dict]:
     return sorted(props.values(), key=lambda p: -p.get("total", 0))
 
 
-_MAX = [35, 25, 20, 20]
-_RAIL = {"✅": "good", "⚠️": "warn", "🚫": "bad"}
-
-
-def _reputation() -> dict[str, str]:
-    """기업평판.md 표 → {_norm(회사): good|warn|bad|none}. 판정 열(4번째 셀)의 기호로 읽는다."""
-    path = JOBFEED / "기업평판.md"
-    if not path.exists():
-        return {}
-    out = {}
-    for ln in path.read_text().splitlines():
-        cells = [c.strip() for c in ln.split("|")]
-        if not ln.startswith("|") or len(cells) < 5:
-            continue
-        name = cells[1]
-        if not name or name == "회사" or set(name) <= {"-", ":"}:
-            continue
-        out[_norm(name)] = next((v for k, v in _RAIL.items() if k in cells[4]), "none")
-    return out
-
-
-def _dues() -> dict[str, str]:
-    """{공고id: 'YYYY-MM-DD'|'상시'} — 마감은 proposals.json에 없고 jobs.jsonl에만 있다."""
-    # ponytail: fetch 시점 값 — 조기 마감은 안 잡힌다. 필요하면 refresh_due.py를 proposals까지 확장
-    path = JOBFEED / "jobs.jsonl"
-    if not path.exists():
-        return {}
-    rows = (json.loads(ln) for ln in path.read_text().splitlines() if ln.strip())
-    return {job_cid(j): (j.get("due") or "상시") for j in rows}
-
-
-def _due_label(raw: str | None, today: date) -> tuple[str, str]:
-    """(표시, css) — 마감이 지난 후보도 목록에 남으므로 대시보드에서 바로 가려낼 수 있게."""
-    if not raw or raw == "상시":
-        return (raw or "", "")
-    try:
-        left = (date.fromisoformat(raw[:10]) - today).days
-    except ValueError:
-        return (raw, "")   # 외부 API가 준 값 — 못 읽으면 그대로 보여준다
-    if left < 0:
-        return (f"마감 지남 {raw[5:10]}", "gone")
-    return (f"D-{left}" if left else "D-day", "u0" if left <= 3 else "u1" if left <= 7 else "")
-
-
 def _decorate(p: dict, rep: dict[str, str], dues: dict[str, str], today: date) -> dict:
     """템플릿용 파생 필드 — 후보목록 rowHTML과 같은 규칙(hi ≥85%, lo ≤40%, 총점 등급)."""
     sc = list(p.get("scores") or []) + [0] * 5
@@ -1008,106 +966,8 @@ async def resume_apply(request: Request):
 
 
 # --- 후보목록 ↔ 지원서류 ------------------------------------------------------
-# 연결 키는 회사명이 아니라 **공고 id**다. 폴더명은 사람이 영문으로 바꿔 두는 일이 잦아
-# (폴더는 영문 슬러그, 회사명은 한글) _app_slug(회사명)으로는 33개 중 1개밖에 못 맞췄다.
-# 대신 문서에 적힌 공고 URL을 읽는다 — write_application이 README에 박아 두고,
-# 사람이 만든 폴더도 대개 0_JD/README에 원문 링크를 적어 뒀다.
-_JOB_URL = re.compile(r"wanted\.co\.kr/wd/(\d+)|jumpit\.saramin\.co\.kr/position/(\d+)")
-
-
-def app_folders() -> list[dict]:
-    """applications/*/ → [{slug, ids, files, docs, mtime}]. ids는 문서에서 읽은 공고 id."""
-    # ponytail: 요청마다 폴더 전체를 다시 읽는다(수십 개 · 수 MB). LAN 1인용이라 캐시 없음 —
-    # 느려지면 폴더 mtime을 키로 memoize
-    out = []
-    if not APPLICATIONS.exists():
-        return out
-    for d in sorted(APPLICATIONS.iterdir()):
-        if not d.is_dir():
-            continue
-        ids: list[str] = []
-        files = sorted(p.name for p in d.glob("*.md"))
-        for name in files:
-            for wanted, jumpit in _JOB_URL.findall((d / name).read_text(errors="replace")):
-                cid = wanted or f"j{jumpit}"
-                if cid not in ids:
-                    ids.append(cid)
-        out.append({"slug": d.name, "ids": ids, "files": files,
-                    "docs": [f for f in files if f in APP_FILES],
-                    "mtime": datetime.fromtimestamp(d.stat().st_mtime).strftime("%Y-%m-%d")})
-    return out
-
-
-def job_index() -> dict[str, dict]:
-    """{공고 id: 폴더}. 한 폴더가 공고 여럿을 가리키면 그 전부가 같은 폴더로 온다."""
-    return {cid: f for f in app_folders() for cid in f["ids"]}
-
-
-# 추천도 = 적합도 × 평판계수 + 통근보정. 계산식 원본은 jobfeed/template.html의 REC·ZONE 표다.
-# ponytail: 파이썬으로 옮겨 적은 사본 — template.html은 build.py가 굽는 산출물이라 서버가
-# 그 값을 넘겨받을 길이 없다. 계산식을 고치면 두 곳을 같이 고쳐야 한다.
-_ZONE = [
-    (4, "통근 불가", re.compile(r"^(부산|대구|광주광역시|대전|울산|세종|강원|충[북남청]|전[북남라]|경[북남상]|제주)")),
-    (0, "성남권", re.compile(r"성남|판교")),
-    (1, "40분대", re.compile(r"(강남|서초|송파|강동)구|하남|광주시|경기\s*광주|용인\S*\s*(수지|기흥)|과천|의왕|구리시")),
-    (2, "60~80분", re.compile(r"서울|수원|안양|군포|용인|화성|동탄")),
-    (3, "수도권 외곽", re.compile(r"인천|부천|고양|김포|파주|의정부|남양주|광명|시흥|안산|평택|오산|이천|여주|양주|포천|동두천|가평|양평|안성|경기")),
-    (4, "통근 불가", re.compile(r".")),
-]
-_REP_MUL = {"good": 1.00, "warn": 0.88, "bad": 0.65, "none": 0.95}
-_ZONE_ADJ = {0: 8, 1: 3, 2: 0, 3: -12, 4: -45, 9: 0}
-_REP_LABEL = {"good": "괜찮음", "warn": "주의", "bad": "회피"}
-
-
-def _zone(addr: str | None) -> tuple[int, str]:
-    if not addr:
-        return (9, "미확인")
-    for n, label, rx in _ZONE:
-        if rx.search(addr):
-            return (n, label)
-    return (9, "미확인")
-
-
-def _cand_due(raw, today: date) -> tuple[str, str]:
-    """candidates.json 마감 표기 — None=상시 · 'closed'=마감됨 · 'YYYY-MM-DD'."""
-    if raw == "closed":
-        return ("마감됨", "gone")
-    if not raw:
-        return ("상시", "always")
-    return _due_label(raw, today)
-
-
-def candidate_rows() -> list[dict]:
-    """candidates.json 행 → 화면용 dict(추천도·순위·마감·통근·평판).
-    순위 #는 내려가지 않은 공고 전체 기준으로 한 번만 매긴다 — 후보목록과 같은 규칙이다."""
-    path = JOBFEED / "candidates.json"
-    if not path.exists():
-        return []
-    today = datetime.now(KST).date()
-    out = []
-    for r in json.loads(path.read_text())["rows"]:
-        cid, total = str(r[2]), sum(r[3])
-        addr = r[8] if len(r) > 8 else None   # 근무지는 refresh_due.py가 나중에 붙인다 — 새 행에는 없다
-        zn, zlabel = _zone(addr)
-        rep = r[4]
-        k = rep[0] if rep else "none"
-        conf = (rep[2] or 0) if rep else 0
-        mul = 1.00 + 0.12 * min(conf / 40, 1) if k == "good" else _REP_MUL[k]
-        due, due_cls = _cand_due(r[7], today)
-        out.append({
-            "id": cid, "company": r[1], "title": r[0], "scores": list(r[3]) + [0] * (5 - len(r[3])),
-            "total": total, "rep": rep, "rep_key": k, "rep_label": _REP_LABEL.get(k, ""),
-            "rep_note": r[5] or "", "tags": r[6] or [], "addr": addr or "",
-            "zone": zn, "zone_label": zlabel, "due": due, "due_cls": due_cls, "closed": r[7] == "closed",
-            # 순위는 반올림 전 값으로 매긴다 — 반올림하면 84.6과 85.4가 동점이 돼 후보목록과 어긋난다
-            "_rec": total * mul + _ZONE_ADJ[zn], "rec": round(total * mul + _ZONE_ADJ[zn]), "rank": None,
-            "tier": "t1" if total >= 80 else "t2" if total >= 70 else "t3",
-            "url": (f"https://jumpit.saramin.co.kr/position/{cid[1:]}" if cid.startswith("j")
-                    else f"https://www.wanted.co.kr/wd/{cid}"),
-        })
-    for i, c in enumerate(sorted((c for c in out if not c["closed"]), key=lambda c: -c["_rec"]), 1):
-        c["rank"] = i
-    return out
+# 연결 키는 회사명이 아니라 **공고 id**다(candidates.py.app_folders 참조). 파생값 계산은
+# jobscouter/candidates.py 한 곳 — app_folders·job_index·candidate_rows는 위에서 import.
 
 
 def _folder_view(folder: dict, doc: str) -> tuple[str, list, str]:
@@ -1121,6 +981,11 @@ def _folder_view(folder: dict, doc: str) -> tuple[str, list, str]:
     return (cur, tabs, _render_md((APPLICATIONS / folder["slug"] / cur).read_text()))
 
 
+def _rank_key(c: dict) -> float:
+    """정렬용 — rank는 candidate_rows()가 이미 반올림 전 추천도로 매겨 둔 순위. None(마감)은 맨 뒤로."""
+    return c["rank"] if c["rank"] is not None else float("inf")
+
+
 @app.get("/applications", response_class=HTMLResponse)
 def applications_index():
     cands = {c["id"]: c for c in candidate_rows()}
@@ -1128,7 +993,7 @@ def applications_index():
     for f in app_folders():
         hits = [cands[i] for i in f["ids"] if i in cands]
         if hits:
-            c = max(hits, key=lambda c: c["_rec"])
+            c = min(hits, key=_rank_key)
             same = [x for x in cands.values() if _norm(x["company"]) == _norm(c["company"])]
             linked.append({**f, "c": c, "others": len(same) - 1,
                            "pips": [{"n": n[0], "on": n in f["docs"]} for n in APP_FILES]})
@@ -1137,7 +1002,7 @@ def applications_index():
                                          if f["ids"] else "문서 어디에도 공고 링크가 없음"),
                             "badge": "공고 내려감" if f["ids"] else "id 없음",
                             "cls": "warn" if f["ids"] else "bad"})
-    linked.sort(key=lambda x: -x["c"]["_rec"])
+    linked.sort(key=lambda x: _rank_key(x["c"]))
     stats = _STATS.render(items=[
         (len(cands), "등재 공고"), (len(linked) + len(orphans), "지원서류 폴더"),
         (len(linked), "공고에 연결됨"),
@@ -1173,7 +1038,7 @@ def application_job(cid: str, doc: str = ""):
     folder = job_index().get(cid)
     others = [x for x in cands.values()
               if _norm(x["company"]) == _norm(c["company"]) and x["id"] != cid]
-    others.sort(key=lambda x: -x["_rec"])
+    others.sort(key=_rank_key)
     cur, tabs, html = _folder_view(folder, doc) if folder else ("", [], "")
     body = _JOBHEAD.render(c=c, folder=folder) + _JOBDOCS.render(
         c=c, folder=folder, cur=cur, tabs=tabs, html=html, others=others)
