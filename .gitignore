@@ -8,3 +8,6 @@ prompts/rubric_v?.md
 __pycache__/
 .venv/
 *.egg-info/
+web/node_modules/
+web/.next/
+web/next-env.d.ts

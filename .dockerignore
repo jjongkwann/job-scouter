@@ -4,3 +4,4 @@ data/
 .git/
 __pycache__/
 deploy/.env
+web/
