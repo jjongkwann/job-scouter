@@ -4,16 +4,41 @@
 판정 파이프라인으로 올린 것. 사람이 끼는 지점(등재 승인·거부, 평판 조사)은
 LAN 웹앱과 대화형 세션으로 모델링한다.
 
+```mermaid
+flowchart LR
+  subgraph DS["DailyScan — 매일 09:07 무인"]
+    direction TB
+    A1["sync_repo"] --> A2["fetch_jobs.py<br/>공개 API 수집"]
+    A2 --> A3["judge × N<br/>루브릭 채점"]
+    A3 --> A4["save_proposals<br/>commit+push"]
+  end
+  subgraph PB["Publish — 웹 승인이 시작"]
+    direction TB
+    B1["sync_repo"] --> B2["commit_rows / reject_proposals"]
+    B2 --> B3["refresh_due → build"]
+    B3 --> B4["draft_application<br/>지원서류 5종 초안"]
+    B4 --> B5["report"]
+  end
+  DS -.->|"웹에서 승인·거부 제출"| PB
+  style DS fill:#ffffff,stroke:#e6e6e1,color:#1a1a18
+  style PB fill:#ffffff,stroke:#e6e6e1,color:#1a1a18
+  classDef io fill:#eef0f3,stroke:#4a5568,color:#1a1a18
+  classDef llm fill:#fbf1de,stroke:#8a5a00,color:#1a1a18
+  class A1,A2,A4,B1,B2,B3 io
+  class A3,B4,B5 llm
 ```
-DailyScan (workflow, 매일 자동)                Publish (workflow, 웹 승인 시작)
- ├─ sync_repo        [io 큐]   jobfeed repo 원격 동기화     ├─ sync_repo   [io 큐]
- ├─ fetch            [io 큐]   공개 API 수집(fetch_jobs.py) ├─ commit_rows(승인) · reject_proposals(거부)
- ├─ judge × N        [llm 큐]  공고당 activity 1개 — 루브릭  │     [io 큐]
- │     채점, JSON 스키마 강제, usage 기록                    ├─ refresh_due → build   [io 큐]
- │     캐시키 (공고id, 루브릭버전, 사실베이스 해시)           │     candidates.json 커밋, 결정론 검증(build.py)
- │     예산 초과 → 미점수 강등                               └─ report                [llm 큐]
- └─ proposals.json 갱신 → commit+push  [io 큐]
-```
+
+회색 = `jobscout-io` 큐(자격증명 없음) · 노랑 = `jobscout-llm` 큐(`claude -p`).
+
+- `judge`는 공고당 activity 1개. JSON 스키마를 강제하고 usage를 기록한다.
+  캐시키는 `(공고id, 루브릭버전, 사실베이스 해시)`, 예산을 넘기면 미점수로 강등한다.
+- `build.py`는 `candidates.json`을 커밋하며 결정론을 검증한다.
+- 이력서 쪽 워크플로(`ResumeSync`·`ApplyResume`·`ResumeChat`·`EndChat`·`RevertFile`·`Draft`)는
+  아래 라우트 표 참조.
+
+회색 = `jobscout-io` 큐(자격증명 없음) · 노랑 = `jobscout-llm` 큐(`claude -p`).
+이력서 쪽 워크플로(`ResumeSync`·`ApplyResume`·`ResumeChat`·`EndChat`·`RevertFile`·`Draft`)는
+아래 라우트 표 참조.
 
 승인·거부는 `web`(FastAPI, :8090)이 `proposals.json`을 보여주고 버튼으로
 `Publish`를 시작한다 — 파일을 직접 고치는 경로는 없다.
