@@ -147,7 +147,20 @@ async def main() -> None:
                                        ScheduleOverlapPolicy, SchedulePolicy,
                                        ScheduleSpec)
         from jobscouter.workflow import DailyScan, ResumeSync
-        await client.create_schedule(
+
+        async def put(name: str, sched: Schedule) -> str:
+            """이미 있으면 지우고 다시 만든다. create_schedule은 중복 id에 ALREADY_EXISTS로
+            죽고, 그러면 뒤에 오는 스케줄이 통째로 등록되지 않는다 — 2026-08-27 실측:
+            daily-scan만 있고 resume-sync는 한 번도 만들어지지 않았다."""
+            try:
+                await client.get_schedule_handle(name).delete()
+                was = "재등록"
+            except RPCError:
+                was = "신규"
+            await client.create_schedule(name, sched)
+            return was
+
+        scanned = await put(
             "daily-scan",
             Schedule(
                 action=ScheduleActionStartWorkflow(
@@ -157,7 +170,7 @@ async def main() -> None:
                                   time_zone_name="Asia/Seoul"),
                 policy=SchedulePolicy(overlap=ScheduleOverlapPolicy.SKIP),
             ))
-        await client.create_schedule(
+        resumed = await put(
             "resume-sync",
             Schedule(
                 action=ScheduleActionStartWorkflow(
@@ -172,8 +185,8 @@ async def main() -> None:
             deleted = "삭제됨"
         except RPCError:
             deleted = "없었음"
-        print("스케줄 등록: 매일 09:07 KST daily-scan · 매주 월 08:00 KST resume-sync"
-              f" — job-scout-weekly {deleted}")
+        print(f"스케줄: daily-scan 매일 09:07 KST({scanned}) · "
+              f"resume-sync 매주 월 08:00 KST({resumed}) — job-scout-weekly {deleted}")
 
     else:
         sys.exit(f"모르는 명령: {cmd}")
