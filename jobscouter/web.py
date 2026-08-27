@@ -818,7 +818,12 @@ async def resume_chat_end(sid: str, request: Request):
     except Exception as e:
         # 저장 거부(대상 파일이 세션 중 바뀜)가 여기로 온다. 세션 버퍼는 그대로 남아 있으므로
         # 스택트레이스 500 대신 이유와 다음 행동을 보여준다 — 2026-08-27 라이브 검증에서 발견.
-        cause = str(e).split("\n")[0][:200]
+        # Temporal이 activity 예외를 두 겹으로 감싸 str(e)는 "Workflow execution failed"뿐이다 —
+        # 실제 사유는 __cause__ 끝에 있다(같은 검증에서 발견).
+        root = e
+        while root.__cause__ is not None:
+            root = root.__cause__
+        cause = str(root).split("\n")[0][:200]
         s = load_chat(sid) or {}
         body = _NOTICE.render(
             cause=cause, sid=sid, key=s.get("target", ""),

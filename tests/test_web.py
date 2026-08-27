@@ -348,7 +348,11 @@ def test_chat_end_shows_reason_instead_of_500(client, monkeypatch, tmp_path):
     monkeypatch.setattr(web, "CHAT_DIR", chat)
 
     async def boom(sid, save):
-        raise RuntimeError("대상 파일이 세션 시작 후 바뀌었습니다 — 저장 취소")
+        # Temporal은 activity 예외를 두 겹으로 감싼다 — 실제 사유는 __cause__ 끝에 있다
+        try:
+            raise RuntimeError("대상 파일이 세션 시작 후 바뀌었습니다 — 저장 취소")
+        except RuntimeError as inner:
+            raise Exception("Workflow execution failed") from inner
 
     monkeypatch.setattr(web, "end_chat", boom)
     r = client.post(f"/resume/chat/{sid}/end", data={"save": "1"}, follow_redirects=False)
