@@ -1,6 +1,6 @@
 # 서버 설정
 
-워커(io·llm)와 Temporal은 서버(docker)에 컨테이너 3개로 상시
+워커(io·llm)·Temporal·API(api)·웹(web)은 서버(docker)에 컨테이너 5개로 상시
 가동한다. Elasticsearch는 서버 호스트에 네이티브로 떠 있고(:9200, localhost 바인드),
 컨테이너는 `host.docker.internal`로 붙는다. jobfeed 데이터는 GitHub private repo를
 서버 호스트에 clone해 컨테이너에 마운트한다.
@@ -59,8 +59,9 @@ docker compose -f deploy/compose.yaml up -d --build
 ## 4. 검증
 
 ```bash
-docker compose -f deploy/compose.yaml ps                 # temporal·io·llm·web 4개 Up
-curl -s -o /dev/null -w '%{http_code}' http://localhost:8090/   # 200 — 웹 대시보드
+docker compose -f deploy/compose.yaml ps                 # temporal·io·llm·api·web 5개 Up
+curl -s -o /dev/null -w '%{http_code}' http://localhost:8090/   # 200 — 웹 대시보드(Next.js)
+curl -s http://localhost:8090/api/reports | head -c 80          # web → api 프록시 확인
 temporal operator cluster health --address localhost:7233   # SERVING (서버 로컬)
 docker compose -f deploy/compose.yaml logs io llm         # 워커 시작 로그 확인
 ```
@@ -98,7 +99,7 @@ uv run python -m jobscouter.worker resume-sync     # 수동 이력서 갱신 제
 
 ```bash
 cd ~/workspace/job-scouter && git pull
-docker compose -f deploy/compose.yaml up -d --build io llm web
+docker compose -f deploy/compose.yaml up -d --build io llm api web
 ```
 
 `temporal` 컨테이너는 재기동하지 않는다 — 워크플로 이력이 SQLite에 있고, 워커만
