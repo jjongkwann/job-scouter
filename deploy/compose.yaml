@@ -1,4 +1,5 @@
-# 서버 상시 가동 서비스. temporal은 워크플로 서버, io/llm은 워커.
+# 서버 상시 가동 서비스. temporal은 워크플로 서버, io/llm은 워커,
+# api는 JSON API(:8091, LAN 비공개), web은 브라우저가 보는 Next.js(:8090).
 # 변수(DATA_REPO·CLAUDE_CODE_OAUTH_TOKEN·GIT_AUTHOR_*)는 deploy/.env — server.env.example 참조.
 name: jobscouter
 
@@ -61,11 +62,10 @@ services:
     depends_on:
       - temporal
 
-  web:
+  api:
     build: ..
-    command: ["/app/.venv/bin/uvicorn", "jobscouter.web:app", "--host", "0.0.0.0", "--port", "8090"]
-    ports:
-      - "8090:8090"   # LAN 대시보드 — 인증 없음, 포트포워딩 금지
+    command: ["/app/.venv/bin/uvicorn", "jobscouter.api:app", "--host", "0.0.0.0", "--port", "8091"]
+    # LAN 포트 없음 — 브라우저는 web만 본다. api는 compose 네트워크 안에서만 열린다.
     environment:
       PYTHONUNBUFFERED: "1"
       JOBSCOUTER_TEMPORAL: temporal:7233
@@ -74,10 +74,20 @@ services:
       JOBSCOUTER_FACTBASE: /work/repo/references/이력서_사실베이스.md
       JOBSCOUTER_PROMPTS: /work/repo/job-scouter/prompts
     volumes:
-      - ${DATA_REPO}:/work/repo
+      - ${DATA_REPO}:/work/repo:ro   # API는 파일을 쓰지 않는다 — 쓰기는 워크플로(io 워커)만
     restart: always
     depends_on:
       - temporal
+
+  web:
+    build: ../web
+    environment:
+      API_URL: http://api:8091
+    ports:
+      - "8090:3000"   # LAN 대시보드 — 인증 없음, 포트포워딩 금지
+    restart: always
+    depends_on:
+      - api
 
 volumes:
   hf-cache:
