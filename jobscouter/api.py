@@ -12,6 +12,10 @@ from datetime import date, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from dotenv import load_dotenv
+
+load_dotenv()  # 로컬 개발: .env의 서버 주소 — 컨테이너는 compose env가 덮는다
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
