@@ -1,0 +1,323 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "job-scouter 시스템 구조",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "daily-scan",
+        "label": "무인 수집·판정 (DailyScan)",
+        "focus": [
+          "temporal",
+          "io",
+          "jobapi",
+          "llm",
+          "claude",
+          "datarepo"
+        ],
+        "note": "매일 09:07 Temporal Schedule이 시작. io가 수집하고 llm이 공고당 1회 채점한 뒤 proposals.json을 commit+push."
+      },
+      {
+        "id": "approve",
+        "label": "사람 승인 (Publish)",
+        "focus": [
+          "browser",
+          "web",
+          "api",
+          "temporal",
+          "io"
+        ],
+        "note": "브라우저에서 승인·거부를 누르면 api가 Publish 워크플로를 시작한다. api는 파일을 쓰지 않는다."
+      },
+      {
+        "id": "credentials",
+        "label": "자격증명 경계",
+        "focus": [
+          "io",
+          "llm",
+          "api",
+          "datarepo",
+          "claude"
+        ],
+        "note": "git push는 io만, Claude 로그인은 llm만, api는 데이터 repo를 :ro로만 본다."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "browser",
+      "type": "external",
+      "label": "브라우저",
+      "sublabel": "LAN · 사람",
+      "pos": [
+        40,
+        80
+      ],
+      "size": [
+        140,
+        64
+      ]
+    },
+    {
+      "id": "web",
+      "type": "frontend",
+      "label": "web",
+      "sublabel": "Next.js :8090",
+      "tag": "LAN 공개 · 인증 없음",
+      "pos": [
+        40,
+        270
+      ],
+      "size": [
+        140,
+        64
+      ]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "api",
+      "sublabel": "FastAPI :8091 · SSE",
+      "tag": "compose 내부만",
+      "pos": [
+        290,
+        270
+      ],
+      "size": [
+        140,
+        64
+      ]
+    },
+    {
+      "id": "temporal",
+      "type": "messagebus",
+      "label": "Temporal",
+      "sublabel": "서버 :7233 · 큐 4개",
+      "tag": "Schedule 09:07 KST",
+      "pos": [
+        540,
+        270
+      ],
+      "size": [
+        140,
+        64
+      ]
+    },
+    {
+      "id": "io",
+      "type": "backend",
+      "label": "io 워커",
+      "sublabel": "workflow + io",
+      "tag": "git-credentials",
+      "pos": [
+        790,
+        270
+      ],
+      "size": [
+        140,
+        64
+      ]
+    },
+    {
+      "id": "llm",
+      "type": "backend",
+      "label": "llm 워커",
+      "sublabel": "judge · draft · chat",
+      "tag": "~/.claude 로그인",
+      "pos": [
+        540,
+        460
+      ],
+      "size": [
+        140,
+        64
+      ]
+    },
+    {
+      "id": "datarepo",
+      "type": "database",
+      "label": "데이터 repo",
+      "sublabel": "git · md · json",
+      "pos": [
+        540,
+        80
+      ],
+      "size": [
+        140,
+        64
+      ]
+    },
+    {
+      "id": "jobapi",
+      "type": "external",
+      "label": "채용 공개 API",
+      "sublabel": "공고 수집 원천",
+      "pos": [
+        1040,
+        80
+      ],
+      "size": [
+        140,
+        64
+      ]
+    },
+    {
+      "id": "es",
+      "type": "database",
+      "label": "Elasticsearch",
+      "sublabel": "호스트 :9200 · RAG 3종",
+      "pos": [
+        1040,
+        270
+      ],
+      "size": [
+        140,
+        64
+      ]
+    },
+    {
+      "id": "claude",
+      "type": "external",
+      "label": "Claude Code",
+      "sublabel": "claude -p · 구독 인증",
+      "pos": [
+        1040,
+        460
+      ],
+      "size": [
+        140,
+        64
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "서버 · docker compose jobscouter",
+      "wraps": [
+        "web",
+        "api",
+        "temporal",
+        "io",
+        "llm"
+      ]
+    },
+    {
+      "kind": "security-group",
+      "label": "repo 쓰기 · push는 io만",
+      "wraps": [
+        "io"
+      ]
+    },
+    {
+      "kind": "security-group",
+      "label": "Claude 실행 경계 (judge.py)",
+      "wraps": [
+        "llm"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "browser-web",
+      "from": "browser",
+      "to": "web",
+      "label": "HTTP :8090",
+      "variant": "emphasis",
+      "labelDy": 76
+    },
+    {
+      "id": "web-api",
+      "from": "web",
+      "to": "api",
+      "label": "/api/* 프록시",
+      "variant": "emphasis"
+    },
+    {
+      "id": "api-temporal",
+      "from": "api",
+      "to": "temporal",
+      "label": "워크플로 시작·조회",
+      "variant": "emphasis"
+    },
+    {
+      "id": "temporal-io",
+      "from": "temporal",
+      "to": "io",
+      "label": "jobscout-wf · io"
+    },
+    {
+      "id": "temporal-llm",
+      "from": "temporal",
+      "to": "llm",
+      "label": "jobscout-llm 0.5/s · chat",
+      "labelDy": 76
+    },
+    {
+      "id": "api-datarepo",
+      "from": "api",
+      "to": "datarepo",
+      "label": "읽기 전용 (:ro)",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "left"
+    },
+    {
+      "id": "io-datarepo",
+      "from": "io",
+      "to": "datarepo",
+      "label": "sync · 쓰기 · commit+push",
+      "fromSide": "top",
+      "toSide": "right"
+    },
+    {
+      "id": "io-jobapi",
+      "from": "io",
+      "to": "jobapi",
+      "label": "fetch_jobs",
+      "fromSide": "top",
+      "toSide": "left"
+    },
+    {
+      "id": "io-es",
+      "from": "io",
+      "to": "es",
+      "label": "RAG 색인·검색"
+    },
+    {
+      "id": "llm-claude",
+      "from": "llm",
+      "to": "claude",
+      "label": "claude -p 실행",
+      "variant": "security"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "무인 사이클",
+      "items": [
+        "DailyScan 매일 09:07: sync_repo → fetch_jobs → judge × N → save_proposals",
+        "판정 캐시키 (공고id, 루브릭버전, 사실베이스 해시) · 호출당 예산 상한, 초과는 미점수",
+        "RAG: bge-m3 + BM25/kNN RRF, k=20 — jobscout_facts · precedents · reputation"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "사람이 끼는 지점",
+      "items": [
+        "웹 승인·거부 → Publish (commit_rows → refresh_due → draft → report)",
+        "이력서 채팅은 jobscout-chat 큐 — 판정 레이트리밋 뒤에 줄 서지 않음"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "자격증명 격리",
+      "items": [
+        "web만 LAN에 열림 · api는 compose 안에서만",
+        "git push는 io만 · Claude 로그인은 llm만 · api는 :ro"
+      ]
+    }
+  ]
+}
