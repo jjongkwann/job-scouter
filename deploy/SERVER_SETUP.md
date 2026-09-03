@@ -95,11 +95,22 @@ uv run python -m jobscouter.worker resume-sync     # 수동 이력서 갱신 제
 로컬 워커 없이 위 명령이 동작한다 — 스케줄 등록도 작업 머신에서 한 번 하면 되고,
 서버에 접속할 필요가 없다(Temporal 클라이언트 호출이라서).
 
-코드 갱신은 서버에서:
+코드 갱신은 작업 머신에서 한 줄로 — `scripts/deploy-mini.sh`가 ssh로 서버에 붙어
+`git pull` 후 리비전이 바뀌었을 때만 재빌드한다:
 
 ```bash
-cd ~/workspace/job-scouter && git pull
-docker compose -f deploy/compose.yaml up -d --build io llm api web
+scripts/deploy-mini.sh            # 변경이 있을 때만 재빌드
+scripts/deploy-mini.sh --force    # 변경이 없어도 재빌드
+scripts/deploy-mini.sh --status   # 마지막 배포 로그(deploy/deploy-mini.log)
+```
+
+작업 머신 `.claude/settings.json`(전역 gitignore 대상 — 저장소에 없다)에 PostToolUse
+훅을 걸어 두면 Claude Code가 `git push`를 실행할 때마다 `scripts/deploy-mini-hook.sh`가
+이 스크립트를 백그라운드로 띄운다. 터미널에서 직접 push했을 땐 수동으로 돌린다.
+
+```json
+{ "hooks": { "PostToolUse": [ { "matcher": "Bash", "hooks": [
+  { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/deploy-mini-hook.sh", "timeout": 15 } ] } ] } }
 ```
 
 `temporal` 컨테이너는 재기동하지 않는다 — 워크플로 이력이 SQLite에 있고, 워커만
