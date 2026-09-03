@@ -73,27 +73,48 @@ def _setup_app_env(tmp_path, monkeypatch):
     (tmp_path / "이력서.md").write_text("이력서 소개")
 
 
-def test_draft_application_splits_5_files(tmp_path, monkeypatch):
+_TARGET = {"id": "222", "company": "회사", "title": "포지션", "src": "wanted", "url": "u",
+           "scores": [30, 10, 20, 16, -5], "reason": "필수 Kotlin 미보유"}
+
+
+def test_draft_application_splits_5_files_and_passes_judgment(tmp_path, monkeypatch):
     _setup_app_env(tmp_path, monkeypatch)
     out_text = "\n\n".join(f"=== FILE: {n} ===\n내용 {n}" for n in J.APP_FILES)
+    called = []
 
     def fake_claude(prompt, system, max_usd, schema=None, timeout=240):
+        called.append(prompt)
         assert timeout == 600
         assert "사실" in system and "예시 0_JD.md" in system and "지원서류 규칙" in system
         return {"result": out_text}
 
     monkeypatch.setattr(J, "_claude", fake_claude)
-    files = J.draft_application("회사", "포지션", "공고 전문")
-    assert set(files) == set(J.APP_FILES)
+    files = J.draft_application(_TARGET, "공고 전문")
+    assert list(files) == J.APP_FILES
     assert files["0_JD.md"] == "내용 0_JD.md"
+    prompt = called[0]
+    assert "회사: 회사" in prompt and "공고 전문" in prompt
+    # 판정 블록 — 축별 점수/상한·감점·총점·사유가 실린다
+    assert "<판정>" in prompt and "도메인: 10/25" in prompt and "감점: -5" in prompt
+    assert "총점: 71" in prompt and "필수 Kotlin 미보유" in prompt
 
 
 def test_draft_application_raises_if_fewer_than_5(tmp_path, monkeypatch):
     _setup_app_env(tmp_path, monkeypatch)
     monkeypatch.setattr(J, "_claude", lambda *a, **k: {
         "result": "=== FILE: 0_JD.md ===\n내용만 하나"})
-    with pytest.raises(RuntimeError, match="5개"):
-        J.draft_application("회사", "포지션", "공고 전문")
+    with pytest.raises(RuntimeError, match="누락"):
+        J.draft_application(_TARGET, "공고 전문")
+
+
+def test_draft_application_raises_on_wrong_filename(tmp_path, monkeypatch):
+    """5개를 냈어도 이름이 하나 틀리면 재시도용 예외 — 이름 검증은 io가 아니라 LLM 단계."""
+    _setup_app_env(tmp_path, monkeypatch)
+    names = J.APP_FILES[:-1] + ["4_포트폴리오.md"]
+    out_text = "\n\n".join(f"=== FILE: {n} ===\n내용" for n in names)
+    monkeypatch.setattr(J, "_claude", lambda *a, **k: {"result": out_text})
+    with pytest.raises(RuntimeError, match="누락.*4_포트폴리오_구성.md"):
+        J.draft_application(_TARGET, "공고 전문")
 
 
 def test_propose_resume_update_reads_factbase_and_resume_and_uses_schema(tmp_path, monkeypatch):

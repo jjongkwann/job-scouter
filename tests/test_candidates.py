@@ -83,3 +83,13 @@ def test_reputation_and_folders(repo):
     f = C.app_folders()
     assert f == [{"slug": "test_co", "ids": ["222"], "files": ["0_JD.md"], "docs": ["0_JD.md"], "mtime": f[0]["mtime"]}]
     assert C.job_index()["222"]["slug"] == "test_co"
+
+
+def test_job_index_prefers_original_folder_over_draft_slot(repo):
+    """`a_1`·`a_1_draft`가 같은 공고를 가리키면 정렬상 앞인 원본 폴더가 이긴다."""
+    apps = repo / "applications"
+    for name in ("a_1_draft", "a_1"):
+        (apps / name).mkdir()
+        (apps / name / "README.md").write_text("공고: https://www.wanted.co.kr/wd/333\n")
+    assert C.job_index()["333"]["slug"] == "a_1"
+    assert C.job_index()["222"]["slug"] == "test_co"

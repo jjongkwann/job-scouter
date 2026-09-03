@@ -11,12 +11,12 @@ import { ScoreCells } from '@/components/score-cells'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 
-// web.py `.dash` 규격 그대로 — 1060px 이하에서는 한 열로 접힌다
-const GRID = 'grid-cols-[minmax(220px,1.1fr)_78px_repeat(5,44px)_48px_minmax(290px,1.6fr)_56px_150px] max-[1060px]:grid-cols-1'
+// web.py `.dash` 규격 그대로 — 1060px 이하에서는 한 열로 접힌다. 판정 열은 O/X 토글 두 칸이 들어가게 96px
+const GRID = 'grid-cols-[minmax(220px,1.1fr)_78px_repeat(5,44px)_48px_minmax(290px,1.6fr)_96px_150px] max-[1060px]:grid-cols-1'
 const RAIL: Record<string, string> = { good: 'rail-good', warn: 'rail-warn', bad: 'rail-bad', none: '' }
 
 const LEGEND: [string, string][] = [
@@ -26,10 +26,14 @@ const LEGEND: [string, string][] = [
   ['var(--rail-none)', '정보 없음'],
 ]
 
+// 거부 사유 프리셋 — X를 고르면 첫 항목으로 미리 채워지고, datalist로도 제안된다
+const X_REASONS = ['적합도 낮음', '스택 불일치', '도메인 불일치', '레벨 불일치', '역할 불일치', '마감·내려감', '평판', '조건(연봉·근무지)']
+
+type Decision = { d: 'o' } | { d: 'x'; why: string }
+
 export default function Home() {
   const qc = useQueryClient()
-  const [approve, setApprove] = useState<Set<string>>(new Set())
-  const [rejects, setRejects] = useState<Record<string, string>>({})
+  const [decisions, setDecisions] = useState<Record<string, Decision>>({})
 
   const { data, isPending, error } = useQuery({
     queryKey: ['dashboard'],
@@ -40,15 +44,14 @@ export default function Home() {
   const submit = useMutation({
     mutationFn: () =>
       post<{ workflow_id: string }>('/publish', {
-        ids: [...approve],
-        rejects: Object.entries(rejects)
-          .filter(([, why]) => why.trim())
-          .map(([id, why]) => ({ id, why: why.trim() })),
+        ids: Object.entries(decisions).filter(([, v]) => v.d === 'o').map(([id]) => id),
+        rejects: Object.entries(decisions)
+          .filter((e): e is [string, { d: 'x'; why: string }] => e[1].d === 'x')
+          .map(([id, v]) => ({ id, why: v.why.trim() || X_REASONS[0] })),
       }),
     onSuccess: () => {
       toast('승인 처리 시작')
-      setApprove(new Set())
-      setRejects({})
+      setDecisions({})
       qc.invalidateQueries()
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.detail : String(e)),
@@ -57,21 +60,23 @@ export default function Home() {
   const pub = data?.publish
   const busy = pub?.status === 'RUNNING'
   const proposals = data?.proposals ?? []
-  const picked = approve.size + Object.values(rejects).filter((w) => w.trim()).length
+  const picked = Object.keys(decisions).length
 
-  const toggle = (id: string, on: boolean) =>
-    setApprove((s) => {
-      const next = new Set(s)
-      if (on) next.add(id)
-      else next.delete(id)
-      return next
+  const decide = (id: string, v: string[]) =>
+    setDecisions((s) => {
+      const rest = Object.fromEntries(Object.entries(s).filter(([k]) => k !== id))
+      if (v[0] === 'o') return { ...rest, [id]: { d: 'o' } }
+      if (v[0] === 'x') return { ...rest, [id]: { d: 'x', why: X_REASONS[0] } }
+      return rest
     })
+  const setWhy = (id: string, why: string) =>
+    setDecisions((s) => (s[id]?.d === 'x' ? { ...s, [id]: { d: 'x', why } } : s))
 
   return (
     <Page
       title="승인 대기"
-      sub="DailyScan이 찾아 판정한 공고입니다. 승인하면 후보목록에 등재되고 지원서류 초안까지 한 번에 만들어집니다."
-      source={<code>jobfeed/candidates.json</code>}
+      sub="DailyScan이 찾아 판정한 공고입니다. 승인하면 후보목록에 등재되고, 지원서류 초안은 이어서 별도 워크플로(Drafts)가 만듭니다 — 그동안 대시보드는 잠기지 않습니다."
+      source={<code>jobfeed/proposals.json</code>}
       stats={[
         [data?.stats.pending ?? '–', '승인 대기'],
         [data?.stats.fit75 ?? '–', '적합도 75+'],
@@ -88,14 +93,15 @@ export default function Home() {
 
       {busy && (
         <Card className="mb-3 rounded-[9px] px-[14px] py-[10px] text-[12.5px] leading-[1.5]">
-          Publish 실행 중 ({pub.start}) — 승인 {pub.ids.length}건 · 거부 {pub.reject_ids.length}건 처리 중. 등재·거부는 먼저
-          반영되고, 지원서류 초안과 보고서는 몇 분 더 걸립니다. 끝나기 전에는 제출할 수 없습니다 — 끝나면 자동으로 갱신됩니다.
+          Publish 실행 중 ({pub.start}) — 승인 {pub.ids.length}건 · 거부 {pub.reject_ids.length}건 처리 중. 등재·거부 반영 →
+          보고서 순으로 진행되고, 완료 후 승인건의 지원서류 초안(Drafts)이 따로 시작됩니다. 끝나기 전에는 제출할 수 없습니다 —
+          끝나면 자동으로 갱신됩니다.
         </Card>
       )}
       {pub?.status === 'FAILED' && (
         <Card className="mb-3 rounded-[9px] border-[var(--rail-bad)] bg-[var(--badbg)] px-[14px] py-[10px] text-[12.5px] leading-[1.5] text-[var(--bad)]">
-          마지막 Publish 실패 ({pub.start}): {pub.error} — 등재·거부는 앞 단계라 반영됐을 수 있고, 초안·보고서는 만들어지지
-          않았습니다. 초안은 <code>worker draft &lt;공고id&gt;</code>로 다시 만듭니다.
+          마지막 Publish 실패 ({pub.start}): {pub.error} — 등재·거부는 앞 단계라 반영됐을 수 있고, 보고서·초안은 만들어지지
+          않았습니다. 초안은 후보목록/공고 화면의 「초안 만들기」 버튼 또는 <code>worker draft &lt;공고id&gt;</code>로 만듭니다.
         </Card>
       )}
 
@@ -122,7 +128,7 @@ export default function Home() {
           <div className="text-center">감점</div>
           <div className="text-center">conf</div>
           <div>판정 사유 · 인용</div>
-          <div className="text-center">승인</div>
+          <div className="text-center">판정</div>
           <div>거부 사유</div>
         </div>
 
@@ -140,21 +146,25 @@ export default function Home() {
               key={p.id}
               p={p}
               locked={busy}
-              approved={approve.has(p.id)}
-              why={rejects[p.id] ?? ''}
-              onApprove={(on) => toggle(p.id, on)}
-              onWhy={(why) => setRejects((r) => ({ ...r, [p.id]: why }))}
+              decision={decisions[p.id]}
+              onDecide={(v) => decide(p.id, v)}
+              onWhy={(why) => setWhy(p.id, why)}
             />
           ))
         )}
       </div>
+      <datalist id="x-reasons">
+        {X_REASONS.map((r) => (
+          <option key={r} value={r} />
+        ))}
+      </datalist>
 
       <div className="mt-2.5 flex items-center gap-3 rounded-[9px] border border-[var(--line)] bg-[var(--row)] px-[14px] py-[11px] text-[12px] text-[var(--dim)]">
         {busy ? (
           <span>실행 중인 Publish가 끝나면 제출할 수 있습니다</span>
         ) : (
           <>
-            <span>승인 체크 · 거부 사유 입력 후 제출하면 Publish 워크플로가 등재·판례·지원서류 초안·보고서를 한 번에 처리합니다</span>
+            <span>O(승인) 또는 X(거부, 사유) 선택 후 제출하면 Publish 워크플로가 등재·판례·보고서를 처리하고, 완료 후 Drafts가 승인건 초안을 순차로 만듭니다</span>
             <Button
               className="ml-auto rounded-full"
               size="sm"
@@ -229,16 +239,14 @@ const statusCls = (s: string) =>
 function Row({
   p,
   locked,
-  approved,
-  why,
-  onApprove,
+  decision,
+  onDecide,
   onWhy,
 }: {
   p: Proposal
   locked: boolean
-  approved: boolean
-  why: string
-  onApprove: (on: boolean) => void
+  decision?: Decision
+  onDecide: (v: string[]) => void
   onWhy: (why: string) => void
 }) {
   return (
@@ -286,15 +294,37 @@ function Row({
       ) : (
         <>
           <div className="flex justify-center max-[1060px]:justify-start">
-            <Checkbox checked={approved} onCheckedChange={onApprove} aria-label={`${p.title} 승인`} />
+            <ToggleGroup value={decision ? [decision.d] : []} onValueChange={onDecide}>
+              <ToggleGroupItem
+                value="o"
+                size="sm"
+                aria-label={`${p.title} 승인`}
+                className="rounded-full border border-[var(--line)] bg-[var(--row)] px-2.5 text-[12px] hover:border-[var(--dim)] aria-pressed:border-[var(--good)] aria-pressed:bg-[var(--good)] aria-pressed:text-white"
+              >
+                O
+              </ToggleGroupItem>
+              <ToggleGroupItem
+                value="x"
+                size="sm"
+                aria-label={`${p.title} 거부`}
+                className="rounded-full border border-[var(--line)] bg-[var(--row)] px-2.5 text-[12px] hover:border-[var(--dim)] aria-pressed:border-[var(--bad)] aria-pressed:bg-[var(--bad)] aria-pressed:text-white"
+              >
+                X
+              </ToggleGroupItem>
+            </ToggleGroup>
           </div>
-          <Input
-            className="h-7 rounded-md text-[12px]"
-            placeholder="거부 사유"
-            value={why}
-            onChange={(e) => onWhy(e.target.value)}
-            aria-label={`${p.title} 거부 사유`}
-          />
+          <div>
+            {decision?.d === 'x' && (
+              <Input
+                className="h-7 rounded-md text-[12px]"
+                placeholder="거부 사유"
+                list="x-reasons"
+                value={decision.why}
+                onChange={(e) => onWhy(e.target.value)}
+                aria-label={`${p.title} 거부 사유`}
+              />
+            )}
+          </div>
         </>
       )}
     </div>

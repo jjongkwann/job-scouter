@@ -16,8 +16,11 @@ flowchart LR
     direction TB
     B1["sync_repo"] --> B2["commit_rows / reject_proposals"]
     B2 --> B3["refresh_due"]
-    B3 --> B4["draft_application<br/>지원서류 5종 초안"]
-    B4 --> B5["report"]
+    B3 --> B5["report"]
+  end
+  subgraph DR["Drafts — Publish 완료 후 자동"]
+    direction TB
+    B4["Draft × 승인건 순차<br/>지원서류 5종 초안"]
   end
   subgraph UI["사람이 보는 곳 — LAN 전용"]
     direction TB
@@ -25,8 +28,10 @@ flowchart LR
   end
   A4 -.->|"proposals.json"| W
   API -.->|"승인·거부 → 워크플로 시작"| PB
+  B5 -.->|"승인건 id"| B4
   style DS fill:#ffffff,stroke:#e6e6e1,color:#1a1a18
   style PB fill:#ffffff,stroke:#e6e6e1,color:#1a1a18
+  style DR fill:#ffffff,stroke:#e6e6e1,color:#1a1a18
   style UI fill:#ffffff,stroke:#e6e6e1,color:#1a1a18
   classDef io fill:#eef0f3,stroke:#4a5568,color:#1a1a18
   classDef llm fill:#fbf1de,stroke:#8a5a00,color:#1a1a18
@@ -42,6 +47,8 @@ flowchart LR
 - `judge`는 공고당 activity 1개. JSON 스키마를 강제하고 usage를 기록한다.
   캐시키는 `(공고id, 루브릭버전, 사실베이스 해시)`, 예산을 넘기면 미점수로 강등한다.
 - 추천도·통근·순위·마감·`candidates.json` 검증은 `jobscouter/candidates.py` 한 곳에서만 계산한다.
+- `Publish`는 등재·거부·보고서까지만 하고 끝난다 — 완료 후 `Drafts`가 승인건 초안을
+  순차로 만들고(한 건 실패해도 나머지는 계속), 실패가 있으면 FAILED로 끝나 화면에 드러난다.
 - 이력서 쪽 워크플로(`ResumeSync`·`ApplyResume`·`ResumeChat`·`EndChat`·`RevertFile`·`Draft`)는
   아래 라우트 표 참조.
 
@@ -76,6 +83,10 @@ import하지 않는다(테스트로 강제). API 키 불필요. 호출당 지출
 
 ## 운영
 
+io 워커는 `.env`에 `JOBSCOUTER_JOBFEED`가 있어야 뜬다(없으면 거부) — 데이터 경로
+없이 띄우면 이 코드 저장소가 데이터 repo가 되어 공개 origin으로 push할 수 있어서다.
+작업 머신에서는 보통 워커를 띄우지 않고 서버 compose가 돌린다.
+
 ```bash
 uv run python -m jobscouter.worker io    # 터미널 1 — workflow+io (자격증명 없음)
 uv run python -m jobscouter.worker llm   # 터미널 2 — judge·report (claude -p)
@@ -83,10 +94,10 @@ uv run python -m jobscouter.worker llm   # 터미널 2 — judge·report (claude
 uv run python -m jobscouter.worker scan [--budget 2000000]   # DailyScan 시작(수동)
 uv run python -m jobscouter.worker publish id1 id2 ...       # Publish 시작 — 등재 승인
 uv run python -m jobscouter.worker reject <id> "<사유>"      # Publish 시작 — 거부만
-uv run python -m jobscouter.worker status                    # 실행 중 DailyScan/Publish 조회
+uv run python -m jobscouter.worker status                    # 실행 중 DailyScan/Publish/Drafts 조회
 uv run python -m jobscouter.worker resume-sync             # 주 1회 이력서 갱신 제안(수동 시작)
 uv run python -m jobscouter.worker apply-resume <id> ...    # 제안 반영
-uv run python -m jobscouter.worker schedule                  # 일 1회 자동 시작 등록(매일 09:07 KST)
+uv run python -m jobscouter.worker schedule                  # daily-scan 매일 09:07·resume-sync 매주 월 08:00 KST 등록(멱등)
 ```
 
 승인·거부는 보통 웹앱에서 한다. 로컬 개발은 API와 화면을 따로 띄운다:
@@ -101,7 +112,7 @@ cd web && API_URL=http://localhost:8091 npm run dev    # 터미널 4 — 화면 
 
 | 경로 | 내용 |
 |---|---|
-| `/` | `proposals.json` 대시보드(점수·사유·인용) + 승인/거부 체크 → `Publish` 시작. 평판 미조사 회사·최근 실행 상태 |
+| `/` | `proposals.json` 대시보드(점수·사유·인용) + O/X 판정 → `Publish` 시작 → 완료 후 `Drafts`(승인건 순차 초안, 실패 시 FAILED로 표시). 평판 미조사 회사·최근 실행 상태 |
 | `/candidates` | 후보 목록 — 필터(평판·태그·적합도·마감·통근)·정렬은 브라우저에서, 추천도·순위는 서버 값. 행마다 「지원서류 n종 →」/「초안 만들기 →」 |
 | `/reports`, `/reports/{name}` | 사이클 보고서 목록·렌더 |
 | `/resume/proposals` | 이력서 갱신 제안 승인 → ApplyResume |
@@ -115,7 +126,7 @@ cd web && API_URL=http://localhost:8091 npm run dev    # 터미널 4 — 화면 
 
 워커가 꺼져 있어도 워크플로는 서버에서 대기하고, 워커를 켜면 이어진다.
 판정 캐시는 `data/judgments.jsonl` — 루브릭을 올리면 `rubric_v2.md` 추가 후
-`judge.RUBRIC_VERSION` 변경, 전 건이 자동 재판정 대상이 된다.
+`config.RUBRIC_VERSION` 변경, 전 건이 자동 재판정 대상이 된다.
 
 서버 컨테이너 운영(io·llm·api·web 상시 가동): `deploy/SERVER_SETUP.md`.
 

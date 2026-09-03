@@ -48,7 +48,14 @@ export type Applications = {
   orphans: (Folder & { why: string; badge: string; cls: 'warn' | 'bad' })[]
 }
 
-export type JobApplication = { candidate: Candidate; folder: Folder | null; others: Candidate[]; docs: Record<string, string>; drafting: boolean }
+export type JobApplication = {
+  candidate: Candidate
+  folder: Folder | null
+  folders: Folder[] // 같은 공고를 가리키는 폴더 전부 — 원본 + 재생성 슬롯(_draft)
+  others: Candidate[]
+  docs: Record<string, string>
+  drafting: boolean
+}
 export type SlugApplication = { folder: Folder; docs: Record<string, string>; linked_cid: string | null }
 
 export type DocItem = { path: string; name: string; group: string }

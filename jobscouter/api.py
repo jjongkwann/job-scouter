@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from temporalio.client import Client
 
 from jobscouter.candidates import (KST, MAX, app_folders, candidate_rows, due_label, dues,
-                                   job_index, reputation, validate)
+                                   reputation, validate)
 from jobscouter.config import (APPLICATIONS, CHAT_DIR, JOBFEED, PROPOSALS, Q_WF, REFERENCES,
                                RESUME, RESUME_PROPOSALS, SID_RE, TEMPORAL, PublishParams,
                                _norm, git_path_at, resume_target)
@@ -35,8 +35,8 @@ app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 _HOST_OK = re.compile(r"(\d{1,3}(\.\d{1,3}){3}|localhost|[\w-]+|[\w-]+\.local)")
 _SHA = re.compile(r"[0-9a-f]{7,40}")   # subprocess/경로에 쓰기 전 형식 검증 — resume_target()과 같은 이유
 # stage를 물어볼 수 있는 워크플로 — status 쿼리가 있는 것만
-_STATUS_TYPES = {"DailyScan", "Publish", "ResumeSync", "ApplyResume"}
-_WF_TYPES = ("DailyScan", "Publish", "ResumeSync", "ApplyResume", "Draft", "RevertFile",
+_STATUS_TYPES = {"DailyScan", "Publish", "Drafts", "ResumeSync", "ApplyResume"}
+_WF_TYPES = ("DailyScan", "Publish", "Drafts", "ResumeSync", "ApplyResume", "Draft", "RevertFile",
              "ResumeChat", "EndChat")
 _DEFAULT_KEY = "이력서.md"          # 이력서 정본 한 문서 — key를 생략하면 이것
 EVENT_TICKS: int | None = None      # SSE 루프 상한 — 테스트만 설정
@@ -134,7 +134,9 @@ def _load_proposals() -> list[dict]:
     path = JOBFEED / PROPOSALS
     if not path.exists():
         return []
-    return sorted(json.loads(path.read_text()).values(), key=lambda p: -p.get("total", 0))
+    # exclude 판정은 재판정 방지용으로만 남긴 것 — 화면에는 안 띄운다
+    return sorted((p for p in json.loads(path.read_text()).values() if not p.get("exclude")),
+                  key=lambda p: -p.get("total", 0))
 
 
 def _load_resume_proposals() -> list[dict]:
@@ -276,7 +278,7 @@ async def recent_runs() -> list[dict]:
     out = []
     async for wf in client.list_workflows(
             " OR ".join(f"WorkflowType='{t}'" for t in
-                        ("DailyScan", "Publish", "ResumeSync", "ApplyResume", "Draft")),
+                        ("DailyScan", "Publish", "Drafts", "ResumeSync", "ApplyResume", "Draft")),
             limit=30):
         out.append({"type": wf.workflow_type,
                     "status": wf.status.name if wf.status else "?",
@@ -420,9 +422,17 @@ async def publish(body: PublishBody):
     if pub and pub["status"] == "RUNNING":
         # 동시에 두 Publish가 같은 repo에 커밋·push하면 충돌한다 — 끝난 뒤 다시
         raise HTTPException(409, "Publish 실행 중 — 끝난 뒤 다시 제출")
-    rejects = [{"id": str(r.get("id", "")), "why": str(r.get("why", "")).strip()}
-               for r in body.rejects if str(r.get("why", "")).strip()]
-    return {"workflow_id": await start_publish(list(body.ids), rejects)}
+    ids = [str(i) for i in body.ids]
+    reject_ids = [str(r.get("id", "")) for r in body.rejects]
+    dup = sorted(set(ids) & set(reject_ids))
+    if dup:
+        raise HTTPException(400, f"같은 공고를 승인과 거부에 동시에 넣을 수 없음: {', '.join(dup)}")
+    empty = [rid for rid, r in zip(reject_ids, body.rejects) if not str(r.get("why", "")).strip()]
+    if empty:
+        raise HTTPException(400, f"거부 사유 없음: {', '.join(empty)}")
+    rejects = [{"id": rid, "why": str(r.get("why", "")).strip()}
+               for rid, r in zip(reject_ids, body.rejects)]
+    return {"workflow_id": await start_publish(ids, rejects)}
 
 
 @app.get("/api/candidates")
@@ -576,18 +586,21 @@ async def applications_draft(body: DraftBody):
 
 
 @app.get("/api/applications/job/{cid}")
-async def application_job(cid: str):
-    """공고 한 건 — 후보 행 + 연결된 폴더의 문서 원문. 문서가 없으면 docs가 비어 온다."""
+async def application_job(cid: str, folder: str = ""):
+    """공고 한 건 — 후보 행 + 연결된 폴더의 문서 원문. 문서가 없으면 docs가 비어 온다.
+    폴더가 여럿(원본 `x_222` + 재생성 슬롯 `x_222_draft`)이면 folders로 전부 주고, `folder`로
+    고른 것(없으면 정렬상 앞 = 원본)의 문서를 docs에 담는다 — 재생성본도 화면에서 볼 수 있게."""
     cands = {c["id"]: c for c in candidate_rows()}
     c = cands.get(cid)
     if not c:
         raise HTTPException(404, "등재되지 않은 공고")
-    folder = job_index().get(cid)
+    folders = [f for f in app_folders() if cid in f["ids"]]
+    sel = next((f for f in folders if f["slug"] == folder), folders[0] if folders else None)
     others = sorted((x for x in cands.values()
                      if _norm(x["company"]) == _norm(c["company"]) and x["id"] != cid),
                     key=_rank_key)
-    return {"candidate": c, "folder": folder, "others": others,
-            "docs": _folder_docs(folder), "drafting": await draft_running(cid)}
+    return {"candidate": c, "folder": sel, "folders": folders, "others": others,
+            "docs": _folder_docs(sel), "drafting": await draft_running(cid)}
 
 
 @app.get("/api/applications/{slug}")

@@ -4,17 +4,19 @@ import uuid
 
 import pytest
 from temporalio import activity
-from temporalio.client import Client
+from temporalio.client import Client, WorkflowFailureError
+from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 
 from jobscouter.config import PublishParams, ScanParams
-from jobscouter.workflow import ApplyResume, DailyScan, Publish, ResumeSync
+from jobscouter.workflow import ApplyResume, DailyScan, Draft, Drafts, Publish, ResumeSync
 
 RAN: list[str] = []
 SAVED: list[list[dict]] = []
 COMMITTED: list[str] = []
 REJECTED: list[dict] = []
+WRITTEN: list[str] = []
 
 
 @activity.defn(name="sync_repo")
@@ -73,10 +75,15 @@ async def fake_judge(inp: dict) -> dict:
             "usage": {"in": 60_000, "out": 1_000}, "cached": False}
 
 
+@activity.defn(name="judge")
+async def fake_judge_cached(inp: dict) -> dict:
+    return {**await fake_judge(inp), "cached": True}
+
+
 @activity.defn(name="save_proposals")
 async def fake_save_proposals(judged: list[dict]) -> int:
     SAVED.append(judged)
-    return len(judged)
+    return sum(1 for j in judged if not j["exclude"])   # 실물처럼 비제외 수만
 
 
 @activity.defn(name="load_proposals")
@@ -113,33 +120,45 @@ async def fake_fetch_posting_full(t: dict) -> str:
 
 
 @activity.defn(name="draft_application")
-async def fake_draft_application(company: str, title: str, posting: str) -> dict:
-    return {n: f"{company} {n}" for n in
+async def fake_draft_application(target: dict, posting: str) -> dict:
+    assert target["scores"] and target["reason"]   # 판정이 LLM까지 전달된다
+    return {n: f"{target['company']} {n}" for n in
             ["0_JD.md", "1_맞춤_이력서.md", "2_자기소개서.md",
              "3_면접지식맵.md", "4_포트폴리오_구성.md"]}
 
 
+@activity.defn(name="draft_application")
+async def fake_draft_application_fails_p9(target: dict, posting: str) -> dict:
+    if target["company"] == "c-p9":
+        raise ApplicationError("LLM 출력 파싱 실패", non_retryable=True)
+    return await fake_draft_application(target, posting)
+
+
 @activity.defn(name="write_application")
 async def fake_write_application(target: dict, files: dict) -> str:
+    WRITTEN.append(target["id"])
     return f"applications/{target['company']}"
 
 
 @activity.defn(name="listed_target")
 async def fake_listed_target(cid: str) -> dict:
     return {"id": cid, "company": f"c-{cid}", "title": "t", "src": "wanted",
-            "url": f"https://www.wanted.co.kr/wd/{cid}"}
+            "url": f"https://www.wanted.co.kr/wd/{cid}",
+            "scores": [30, 18, 20, 16, -5], "reason": "판정 사유"}
 
 
 _SCAN_ACTS = [fake_sync_repo, fake_fetch_jobs, fake_load_targets, fake_fetch_requirements,
              fake_search_context, fake_judge, fake_save_proposals]
 _PUB_ACTS = [fake_sync_repo, fake_load_proposals, fake_commit_rows, fake_reject_proposals,
             fake_save_proposals, fake_refresh_due, fake_report, fake_commit_outputs,
-            fake_fetch_posting_full, fake_draft_application, fake_write_application]
+            fake_listed_target, fake_fetch_posting_full, fake_draft_application,
+            fake_write_application]
 
 
-async def _run_scan(client: Client, params: ScanParams | None = None) -> dict:
+async def _run_scan(client: Client, params: ScanParams | None = None,
+                    acts: list | None = None) -> dict:
     q = f"test-{uuid.uuid4()}"
-    async with Worker(client, task_queue=q, workflows=[DailyScan], activities=_SCAN_ACTS,
+    async with Worker(client, task_queue=q, workflows=[DailyScan], activities=acts or _SCAN_ACTS,
                       # 샌드박스는 workflow 모듈을 격리된 사본으로 재로드해
                       # 아래 monkeypatch가 보이지 않는다(temporalio 1.31 실측) —
                       # 테스트는 unsandboxed로 돌려 호스트 모듈 상태를 공유한다
@@ -153,9 +172,10 @@ async def _run_scan(client: Client, params: ScanParams | None = None) -> dict:
         return await handle.result()
 
 
-async def _run_publish(client: Client, params: PublishParams) -> dict:
+async def _run_publish(client: Client, params: PublishParams) -> tuple[dict, dict | None]:
+    """(Publish 결과, Drafts 결과) — Drafts는 ABANDON 자식이라 같은 Worker 안에서 따로 기다린다."""
     q = f"test-{uuid.uuid4()}"
-    async with Worker(client, task_queue=q, workflows=[Publish], activities=_PUB_ACTS,
+    async with Worker(client, task_queue=q, workflows=[Publish, Drafts, Draft], activities=_PUB_ACTS,
                       workflow_runner=UnsandboxedWorkflowRunner()):
         import jobscouter.workflow as wf
         wf._IO_OPTS["task_queue"] = q
@@ -163,12 +183,15 @@ async def _run_publish(client: Client, params: PublishParams) -> dict:
         wf._DRAFT_OPTS["task_queue"] = q
         handle = await client.start_workflow(
             Publish.run, params, id=f"wf-{uuid.uuid4()}", task_queue=q)
-        return await handle.result()
+        out = await handle.result()
+        drafts = await client.get_workflow_handle(out["drafts"]).result() if out["drafts"] else None
+        return out, drafts
 
 
 @pytest.mark.asyncio
 async def test_daily_scan_saves_non_excluded():
-    """judge 스텁: t0·t2 비제외, t1·t3 제외(i%2==1) → save_proposals에 2건만 간다."""
+    """judge 스텁: t0·t2 비제외, t1·t3 제외(i%2==1) → save_proposals에 4건 전부(exclude 플래그
+    포함) 가고, 반환(화면에 뜨는 수)은 2."""
     env = await WorkflowEnvironment.start_time_skipping()
     try:
         RAN.clear()
@@ -178,7 +201,8 @@ async def test_daily_scan_saves_non_excluded():
         assert out["judged"] == 4
         assert out["excluded"] == 2
         assert out["demoted"] == 0
-        assert {j["id"] for j in SAVED[-1]} == {"t0", "t2"}
+        assert {j["id"]: j["exclude"] for j in SAVED[-1]} == \
+            {"t0": False, "t1": True, "t2": False, "t3": True}
         assert all(j["url"] and j["src"] for j in SAVED[-1])   # target url/src 병합됨
         assert out["proposals"] == 2
     finally:
@@ -193,6 +217,20 @@ async def test_budget_demotion():
         out = await _run_scan(env.client, ScanParams(budget_tokens=100_000, chunk=2))
         assert out["judged"] == 2
         assert out["demoted"] == 2   # 예산 초과 → 미점수 강등
+    finally:
+        await env.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_cached_judgments_do_not_spend_budget():
+    """같은 조건(chunk=2, 예산 100k, judge당 61k)이라도 캐시 적중이면 LLM 지출 0 → 강등 없음."""
+    env = await WorkflowEnvironment.start_time_skipping()
+    try:
+        acts = [fake_judge_cached if a is fake_judge else a for a in _SCAN_ACTS]
+        out = await _run_scan(env.client, ScanParams(budget_tokens=100_000, chunk=2), acts)
+        assert out["judged"] == 4
+        assert out["demoted"] == 0
+        assert out["spent_tokens"] == 0
     finally:
         await env.shutdown()
 
@@ -227,7 +265,7 @@ async def test_publish_commits_approved_and_rejects():
         RAN.clear()
         COMMITTED.clear()
         REJECTED.clear()
-        out = await _run_publish(
+        out, drafts = await _run_publish(
             env.client,
             PublishParams(ids=["p0"], rejects=[{"id": "p1", "why": "연봉 미공개"}]))
         assert COMMITTED == ["p0"]
@@ -237,14 +275,52 @@ async def test_publish_commits_approved_and_rejects():
         assert out["reject"] == 1
         assert out["report"]
         assert out["outputs"] == "커밋됨"
-        assert out["drafts"] == {"p0": "applications/c-p0"}   # approved 1건 → 초안 완료
+        assert out["drafts"].startswith("drafts-")   # 초안은 Publish 밖 — Drafts 자식 id만 남긴다
+        assert drafts == {"done": {"p0": "applications/c-p0"}, "failed": {}}
+    finally:
+        await env.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_publish_without_approved_does_not_start_drafts():
+    env = await WorkflowEnvironment.start_time_skipping()
+    try:
+        COMMITTED.clear()
+        out, drafts = await _run_publish(
+            env.client, PublishParams(ids=[], rejects=[{"id": "p1", "why": "연봉 미공개"}]))
+        assert COMMITTED == []
+        assert out["drafts"] == ""
+        assert drafts is None
+    finally:
+        await env.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_drafts_continues_after_failure_then_fails():
+    """p9 초안이 LLM 단계에서 죽어도 p0은 write_application까지 가고, 끝에 FAILED로 끝난다."""
+    env = await WorkflowEnvironment.start_time_skipping()
+    try:
+        WRITTEN.clear()
+        q = f"test-{uuid.uuid4()}"
+        acts = [fake_draft_application_fails_p9 if a is fake_draft_application else a
+                for a in _PUB_ACTS]
+        async with Worker(env.client, task_queue=q, workflows=[Drafts, Draft], activities=acts,
+                          workflow_runner=UnsandboxedWorkflowRunner()):
+            import jobscouter.workflow as wf
+            for opts in (wf._IO_OPTS, wf._LLM_OPTS, wf._DRAFT_OPTS):
+                opts["task_queue"] = q
+            with pytest.raises(WorkflowFailureError) as exc:
+                await env.client.execute_workflow(
+                    Drafts.run, ["p9", "p0"], id=f"drafts-{q}", task_queue=q)
+        msg = str(exc.value.cause)
+        assert "초안 실패 1건" in msg and "p9" in msg and "LLM 출력 파싱 실패" in msg
+        assert WRITTEN == ["p0"]
     finally:
         await env.shutdown()
 
 
 @pytest.mark.asyncio
 async def test_draft_regenerates_application_for_listed_posting():
-    from jobscouter.workflow import Draft
     env = await WorkflowEnvironment.start_time_skipping()
     try:
         q = f"test-{uuid.uuid4()}"

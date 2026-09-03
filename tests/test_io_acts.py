@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import jobscouter.candidates as cands
 import jobscouter.io_acts as io_acts
 from jobscouter import config
 from jobscouter.config import Target
@@ -12,6 +13,7 @@ from jobscouter.config import Target
 
 def _touch_jobfeed(tmp_path, monkeypatch):
     monkeypatch.setattr(io_acts, "JOBFEED", tmp_path)
+    monkeypatch.setattr(cands, "JOBFEED", tmp_path)   # dues()는 candidates 전역을 본다
     (tmp_path / "candidates.json").write_text(json.dumps({
         "rows": [["포지션", "나쁜회사", 111, [30, 10, 16, 20],
                   ["bad", 1.0, 10, "1,1", "요약"], None, [], None],
@@ -24,17 +26,25 @@ def _touch_jobfeed(tmp_path, monkeypatch):
         {"src": "wanted", "id": 333, "title": "C", "company": "스킵회사", "url": "u"},
         {"src": "wanted", "id": 444, "title": "D", "company": "(주)나쁜회사", "url": "u"},
         {"src": "jumpit", "id": 555, "title": "E", "company": "새회사", "url": "u"},
+        {"src": "wanted", "id": 666, "title": "F", "company": "판정회사", "url": "u"},
+        {"src": "wanted", "id": 777, "title": "G", "company": "옛판정회사", "url": "u", "due": "상시"},
+        {"src": "wanted", "id": 888, "title": "H", "company": "마감회사", "url": "u", "due": "2020-01-01"},
     ]
     (tmp_path / "jobs.jsonl").write_text(
         "\n".join(json.dumps(j, ensure_ascii=False) for j in jobs))
+    (tmp_path / "proposals.json").write_text(json.dumps({
+        "666": {"id": "666", "exclude": True, "rubric_version": config.RUBRIC_VERSION},
+        "777": {"id": "777", "exclude": False, "rubric_version": "v0"},
+    }))
 
 
 def test_load_targets(tmp_path, monkeypatch):
     _touch_jobfeed(tmp_path, monkeypatch)
     got = io_acts.load_targets()
     ids = [t.id for t in got]
-    # 111 등재됨·222 등재됨·333 스킵·444 🚫회사 정규화 매칭 → 미점수는 j555뿐
-    assert ids == ["j555"]
+    # 111 등재됨·222 등재됨·333 스킵·444 🚫회사 정규화 매칭·666 현 루브릭 판정(exclude여도)·
+    # 888 마감 지남 → 남는 건 j555와 옛 루브릭 판정 777(재판정 대상)
+    assert ids == ["j555", "777"]
 
 
 def test_fetch_requirements_jumpit_plural_and_cap(monkeypatch):
@@ -79,30 +89,41 @@ def _init_repo(tmp_path):
 
 
 def test_save_proposals_merges_and_cleans(tmp_path, monkeypatch):
-    """이미 등재된 id는 병합 후 제거되고, 신규는 남아 commit_rows 입력 형식으로 저장된다."""
+    """이미 등재된 id·마감 지난 id는 병합 후 제거되고, 신규(exclude 포함)는 남아
+    commit_rows 입력 형식으로 저장된다. 반환값은 비제외 건수."""
     _init_repo(tmp_path)
     jobfeed = tmp_path / "jobfeed"
     jobfeed.mkdir()
     monkeypatch.setattr(io_acts, "JOBFEED", jobfeed)
+    monkeypatch.setattr(cands, "JOBFEED", jobfeed)   # dues()는 candidates 전역을 본다
     (jobfeed / "candidates.json").write_text(json.dumps({
         "rows": [["포지션", "등재회사", 222, [30, 10, 16, 20, 0], None, "사유", [], None]],
         "skipped": {"333": ["스킵회사", "포지션", "사유"]},
     }, ensure_ascii=False))
+    (jobfeed / "jobs.jsonl").write_text("\n".join(json.dumps(j) for j in [
+        {"src": "jumpit", "id": 555, "due": "2999-12-31"},
+        {"src": "wanted", "id": 666},                      # due 없음 → 상시 취급, 유지
+        {"src": "wanted", "id": 777, "due": "2020-01-01"},  # 마감 지남 → 제거
+    ]))
+    base = {"scores": [30, 10, 16, 20, 0], "total": 76, "reason": "r", "quotes": [],
+            "confidence": 0.9, "rubric_version": "v1", "exclude": False}
     judged = [
-        {"id": "222", "company": "등재회사", "title": "포지션", "url": "u1", "src": "wanted",
-         "scores": [30, 10, 16, 20, 0], "total": 76, "reason": "r", "quotes": [],
-         "confidence": 0.9, "rubric_version": "v1"},
-        {"id": "555", "company": "새회사", "title": "백엔드", "url": "u2", "src": "jumpit",
-         "scores": [30, 18, 20, 16, -5], "total": 79, "reason": "r2", "quotes": [],
-         "confidence": 0.8, "rubric_version": "v1"},
+        {**base, "id": "222", "company": "등재회사", "title": "포지션", "url": "u1", "src": "wanted"},
+        {**base, "id": "555", "company": "새회사", "title": "백엔드", "url": "u2", "src": "jumpit",
+         "scores": [30, 18, 20, 16, -5], "total": 79},
+        {**base, "id": "666", "company": "제외회사", "title": "포지션", "url": "u3", "src": "wanted",
+         "exclude": True},
+        {**base, "id": "777", "company": "마감회사", "title": "포지션", "url": "u4", "src": "wanted"},
     ]
     n = io_acts.save_proposals(judged)
-    assert n == 1
+    assert n == 1   # 555만 화면에 뜬다 — 666은 exclude
     saved = json.loads((jobfeed / "proposals.json").read_text())
     assert "222" not in saved   # candidates rows에 이미 있음 → 제거
+    assert "777" not in saved   # 마감 지남 → 제거
     assert saved["555"]["company"] == "새회사"
     assert saved["555"]["url"] == "u2"
     assert saved["555"]["judged_at"]
+    assert saved["666"]["exclude"] is True   # 재판정 방지용으로 남는다
 
 
 def test_reject_proposals_records_skipped(tmp_path, monkeypatch):
@@ -162,7 +183,7 @@ def _init_git_repo(tmp_path):
     subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "t"], check=True)
 
 
-def test_write_application_creates_5_files_and_readme_then_drafts_on_conflict(tmp_path, monkeypatch):
+def test_write_application_folder_per_posting_and_single_draft_slot(tmp_path, monkeypatch):
     _init_git_repo(tmp_path)
     jobfeed = tmp_path / "jobfeed"
     jobfeed.mkdir()
@@ -177,7 +198,7 @@ def test_write_application_creates_5_files_and_readme_then_drafts_on_conflict(tm
 
     path = io_acts.write_application(target, files)
     folder = Path(path)
-    assert folder.name == "테스트회사"   # 한글 그대로
+    assert folder.name == "테스트회사_222"   # 회사 slug(한글 그대로) + 공고 id
     for name, content in files.items():
         assert (folder / name).read_text() == content
     readme = (folder / "README.md").read_text()
@@ -186,7 +207,18 @@ def test_write_application_creates_5_files_and_readme_then_drafts_on_conflict(tm
     assert "공고: https://www.wanted.co.kr/wd/222" in readme
 
     path2 = io_acts.write_application(target, files)   # 폴더 이미 있음 → _draft 접미
-    assert Path(path2).name == "테스트회사_draft"
+    assert Path(path2).name == "테스트회사_222_draft"
+    (folder / "0_JD.md").write_text("사람이 고친 원본")
+    files3 = {**files, "0_JD.md": "세 번째 초안"}
+    path3 = io_acts.write_application(target, files3)   # _draft는 슬롯 하나 — 덮어쓴다
+    assert path3 == path2
+    assert (Path(path3) / "0_JD.md").read_text() == "세 번째 초안"
+    assert (folder / "0_JD.md").read_text() == "사람이 고친 원본"   # 원본은 안 건드린다
+    # 같은 회사 다른 공고는 별도 폴더
+    path4 = io_acts.write_application({**target, "id": "333"}, files)
+    assert Path(path4).name == "테스트회사_333"
+    assert sorted(p.name for p in (tmp_path / "applications").iterdir()) == [
+        "테스트회사_222", "테스트회사_222_draft", "테스트회사_333"]
 
 
 def test_commit_outputs_no_change(tmp_path, monkeypatch):
@@ -256,12 +288,45 @@ def test_commit_and_push_skips_ignored_paths(tmp_path, monkeypatch):
     (repo / "jobfeed" / "new.md").write_text("x")
     (repo / "jobfeed" / "jobs.jsonl").write_text("{}")
     monkeypatch.setattr(io_acts, "JOBFEED", repo / "jobfeed")
-    monkeypatch.setenv("GIT_AUTHOR_NAME", "t"); monkeypatch.setenv("GIT_AUTHOR_EMAIL", "t@t")
-    monkeypatch.setenv("GIT_COMMITTER_NAME", "t"); monkeypatch.setenv("GIT_COMMITTER_EMAIL", "t@t")
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "t")
+    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "t@t")
+    monkeypatch.setenv("GIT_COMMITTER_NAME", "t")
+    monkeypatch.setenv("GIT_COMMITTER_EMAIL", "t@t")
     out = io_acts._commit_and_push(["jobfeed/jobs.jsonl", "jobfeed/new.md"], "t")
     assert "변경 없음" not in out
     log = subprocess.run(["git", "-C", str(repo), "log", "--oneline"], capture_output=True, text=True).stdout
     assert log.count("\n") == 2   # init + 이번 커밋
+
+
+def _git_repo(tmp_path):
+    repo = tmp_path / "repo"; (repo / "jobfeed").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t",
+                    "commit", "-q", "--allow-empty", "-m", "init"], check=True)
+    return repo
+
+
+def test_commit_and_push_nothing_to_commit(tmp_path, monkeypatch):
+    repo = _git_repo(tmp_path)
+    monkeypatch.setattr(io_acts, "JOBFEED", repo / "jobfeed")
+    assert io_acts._commit_and_push([], "t") == "변경 없음"
+
+
+def test_commit_and_push_raises_on_other_commit_failure(tmp_path, monkeypatch):
+    """작성자 미설정(자동 추정도 끔)으로 commit이 죽으면 '변경 없음'이 아니라 RuntimeError —
+    activity 재시도가 걸리고 실패가 워크플로에 드러나야 한다."""
+    repo = _git_repo(tmp_path)
+    (repo / "jobfeed" / "jobs.jsonl").write_text("{}")
+    monkeypatch.setattr(io_acts, "JOBFEED", repo / "jobfeed")
+    for k in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "user.useConfigOnly")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "true")
+    with pytest.raises(RuntimeError, match="git commit 실패"):
+        io_acts._commit_and_push(["jobfeed/jobs.jsonl"], "t")
 
 
 def test_write_application_rejects_traversal_names(tmp_path, monkeypatch):
@@ -272,7 +337,7 @@ def test_write_application_rejects_traversal_names(tmp_path, monkeypatch):
     monkeypatch.setattr(io_acts, "_commit_and_push", lambda paths, msg: "ok")
     bad = {**{n: "x" for n in APP_FILES[:-1]}, "../../evil.md": "x"}
     with pytest.raises(ValueError):
-        io_acts.write_application({"company": "회사", "url": "u"}, bad)   # 탈출 파일명은 걸러지고 5종 미달로 거부
+        io_acts.write_application({"id": "1", "company": "회사", "url": "u"}, bad)   # 탈출 파일명은 걸러지고 5종 미달로 거부
     assert not (tmp_path / "evil.md").exists()
     assert io_acts._app_slug("../x/..") == "x"   # slug는 경로 문자를 제거한다
 
@@ -495,6 +560,7 @@ def test_listed_target_from_candidates(tmp_path, monkeypatch):
     monkeypatch.setattr(io_acts, "JOBFEED", tmp_path)
     t = io_acts.listed_target("382461")
     assert (t["company"], t["src"], t["url"]) == ("딜라이트룸", "wanted", "https://www.wanted.co.kr/wd/382461")
+    assert (t["scores"], t["reason"]) == ([22, 10, 20, 20, -5], "x")   # 초안이 약한 축을 보완하는 데 쓴다
     assert io_acts.listed_target("j54736975")["url"] == "https://jumpit.saramin.co.kr/position/54736975"
     with pytest.raises(ValueError):
         io_acts.listed_target("999")

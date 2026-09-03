@@ -1,5 +1,5 @@
 'use client'
-import { use } from 'react'
+import { use, useState } from 'react'
 import Link from 'next/link'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -12,6 +12,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { APP_FILES, DocTabs } from '../../doc-tabs'
 
 const RAIL: Record<string, string> = { good: 'rail-good', warn: 'rail-warn', bad: 'rail-bad', none: '' }
@@ -29,10 +30,13 @@ const AXES = ['스택', '도메인', '레벨', '역할']
 export default function JobApplicationPage({ params }: { params: Promise<{ cid: string }> }) {
   const { cid } = use(params)
   const qc = useQueryClient()
+  // 같은 공고를 가리키는 폴더가 여럿(원본 + 재생성 슬롯 _draft)일 때 고른 것. 비면 서버 기본(원본)
+  const [folderSlug, setFolderSlug] = useState('')
 
   const { data, isPending, error } = useQuery({
-    queryKey: ['application-job', cid],
-    queryFn: () => get<JobApplication>(`/applications/job/${encodeURIComponent(cid)}`),
+    queryKey: ['application-job', cid, folderSlug],
+    queryFn: () =>
+      get<JobApplication>(`/applications/job/${encodeURIComponent(cid)}${folderSlug ? `?folder=${encodeURIComponent(folderSlug)}` : ''}`),
     // 초안이 도는 동안만 짧게 폴링한다 — 끝나면 SSE 토스트와 함께 무효화되고 멈춘다
     refetchInterval: (q) => (q.state.data?.drafting ? 3000 : false),
   })
@@ -63,7 +67,7 @@ export default function JobApplicationPage({ params }: { params: Promise<{ cid: 
       </Page>
     )
 
-  const { candidate: c, folder, others, docs, drafting } = data
+  const { candidate: c, folder, folders, others, docs, drafting } = data
   const src = c.id.startsWith('j') ? '점핏' : '원티드'
   const status = c.closed ? '공고 마감' : folder ? '미지원' : '초안 없음'
   const extra = folder ? folder.files.filter((f) => !APP_FILES.includes(f)) : []
@@ -183,6 +187,25 @@ export default function JobApplicationPage({ params }: { params: Promise<{ cid: 
 
       <div className="grid grid-cols-[minmax(0,1fr)_260px] items-start gap-4 max-[1060px]:grid-cols-1">
         <div>
+          {folders.length > 1 && folder && (
+            <div className="mb-2 flex flex-wrap items-center gap-2 text-[11.5px] text-[var(--dim)]">
+              <span>폴더</span>
+              <ToggleGroup value={[folder.slug]} onValueChange={(v) => v[0] && setFolderSlug(String(v[0]))}>
+                {folders.map((f) => (
+                  <ToggleGroupItem
+                    key={f.slug}
+                    value={f.slug}
+                    size="sm"
+                    aria-label={`폴더 ${f.slug}`}
+                    className="rounded-full border border-[var(--line)] bg-[var(--row)] px-2.5 text-[12px] hover:border-[var(--dim)] aria-pressed:border-[var(--fg)] aria-pressed:bg-[var(--fg)] aria-pressed:text-white"
+                  >
+                    {f.slug.endsWith('_draft') ? '재생성본' : '원본'} · {f.mtime}
+                  </ToggleGroupItem>
+                ))}
+              </ToggleGroup>
+              <span>재생성은 원본을 두고 _draft 슬롯에 덮어씁니다</span>
+            </div>
+          )}
           <DocTabs
             docs={docs}
             empty={

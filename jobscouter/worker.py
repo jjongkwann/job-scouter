@@ -12,6 +12,7 @@
     uv run python -m jobscouter.worker schedule               # 자동 시작 등록(일 1회 스캔·주 1회 이력서)
 """
 import asyncio
+import os
 import sys
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -30,7 +31,8 @@ async def _running_handle(client: Client):
     """실행 중인 사이클 핸들. 스케줄 시작 워크플로는 id가 매번 달라 검색으로 찾는다."""
     async for wf in client.list_workflows(
             "(WorkflowType='DailyScan' OR WorkflowType='Publish' "
-            "OR WorkflowType='ResumeSync' OR WorkflowType='ApplyResume' OR WorkflowType='Draft') "
+            "OR WorkflowType='ResumeSync' OR WorkflowType='ApplyResume' "
+            "OR WorkflowType='Drafts' OR WorkflowType='Draft') "
             "AND ExecutionStatus='Running'"):
         return client.get_workflow_handle(wf.id)
     sys.exit("실행 중인 사이클이 없다")
@@ -38,12 +40,17 @@ async def _running_handle(client: Client):
 
 async def main() -> None:
     cmd = sys.argv[1] if len(sys.argv) > 1 else "status"
+
+    if cmd == "io" and not os.environ.get("JOBSCOUTER_JOBFEED"):
+        sys.exit("JOBSCOUTER_JOBFEED 없음 — 데이터 경로 없이 io 워커를 띄우면 이 코드 저장소가 "
+                  "데이터 repo가 되어 공개 origin으로 push한다. .env에 설정하거나 서버 compose로 실행")
+
     client = await Client.connect(TEMPORAL)
 
     if cmd == "io":
         from jobscouter import io_acts, jobfeed, search
-        from jobscouter.workflow import (ApplyResume, DailyScan, Draft, EndChat, Publish,
-                                         ResumeChat, ResumeSync, RevertFile)
+        from jobscouter.workflow import (ApplyResume, DailyScan, Draft, Drafts, EndChat,
+                                         Publish, ResumeChat, ResumeSync, RevertFile)
         acts = [io_acts.load_targets,
                 io_acts.fetch_requirements, io_acts.commit_rows,
                 io_acts.sync_repo, io_acts.save_proposals,
@@ -58,7 +65,7 @@ async def main() -> None:
         ex = ThreadPoolExecutor(4)
         workers = [
             Worker(client, task_queue=Q_WF,
-                   workflows=[DailyScan, Publish, ResumeSync, ApplyResume, Draft,
+                   workflows=[DailyScan, Publish, Drafts, ResumeSync, ApplyResume, Draft,
                              RevertFile, ResumeChat, EndChat]),
             Worker(client, task_queue=Q_IO, activities=acts, activity_executor=ex),
         ]

@@ -1,9 +1,11 @@
-"""DailyScan/Publish — 결정론적 오케스트레이션만. 파일IO·네트워크·시계 직접 사용 금지."""
+"""DailyScan/Publish/Drafts/Draft — 결정론적 오케스트레이션만. 파일IO·네트워크·시계 직접 사용 금지.
+초안(_draft)은 listed_target dict(판정 scores·reason 포함)를 그대로 LLM에 넘긴다."""
 import asyncio
 from datetime import timedelta
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
+from temporalio.exceptions import ApplicationError, ChildWorkflowError, WorkflowAlreadyStartedError
 
 from jobscouter.config import Q_CHAT, Q_IO, Q_LLM, PublishParams, ScanParams
 
@@ -26,17 +28,19 @@ _CHAT_OPTS = dict(
 
 
 async def _draft(target: dict) -> str:
-    """공고 전문 → LLM 초안 5종 → applications/에 기록(커밋·push). Publish와 Draft가 공유."""
+    """공고 전문 → LLM 초안 5종(target의 판정 점수·사유 활용) → applications/{회사}_{공고id}/에
+    기록(커밋·push). 파일명 검증은 draft_application 안 — 틀리면 LLM 단계가 재시도된다."""
     posting = await workflow.execute_activity("fetch_posting_full", target, **_IO_OPTS)
     files = await workflow.execute_activity(
-        "draft_application", args=[target["company"], target["title"], posting], **_DRAFT_OPTS)
+        "draft_application", args=[target, posting], **_DRAFT_OPTS)
     return await workflow.execute_activity(
         "write_application", args=[target, files], **_IO_OPTS)
 
 
 @workflow.defn
 class Draft:
-    """등재된 공고 하나의 지원서류 초안 (재)생성 — Publish 도중 LLM이 실패했을 때 복구용."""
+    """등재된 공고 하나의 지원서류 초안 (재)생성 — 웹 버튼·`worker draft`가 시작하고 Drafts도 자식으로 쓴다.
+    listed_target이 돌려준 dict(scores·reason 포함)를 그대로 _draft에 넘긴다."""
 
     @workflow.run
     async def run(self, cid: str) -> str:
@@ -45,9 +49,53 @@ class Draft:
         return await _draft(target)
 
 
+def _cause(e: BaseException) -> str:
+    """Temporal은 activity 예외를 여러 겹으로 감싼다 — 실제 사유는 __cause__ 끝에 있다."""
+    while e.__cause__ is not None:
+        e = e.__cause__
+    return str(e).split("\n")[0][:200]
+
+
+@workflow.defn
+class Drafts:
+    """Publish 완료 직후 시작(ABANDON — Publish는 기다리지 않는다). 승인건마다 Draft 자식을
+    순차 실행 — LLM 초안은 건당 몇 분이라 Publish 안에서 돌리면 대시보드 잠금(409)이 그만큼
+    길어진다. 하나가 실패해도 나머지는 계속하고, 끝에 실패가 있으면 FAILED로 끝나
+    SSE 토스트·최근 실행 목록에 드러난다(성공한 건은 이미 커밋됨)."""
+
+    def __init__(self) -> None:
+        self._stage = "시작"
+
+    @workflow.query
+    def status(self) -> dict:
+        return {"stage": self._stage}
+
+    @workflow.run
+    async def run(self, cids: list[str]) -> dict:
+        done: dict[str, str] = {}
+        failed: dict[str, str] = {}
+        for i, cid in enumerate(cids, 1):
+            self._stage = f"초안 {i}/{len(cids)}"
+            try:
+                # 웹 버튼·`worker draft`와 같은 id — 사람이 먼저 시작해 둔 것과 겹쳐 만들지 않는다
+                done[cid] = await workflow.execute_child_workflow(
+                    Draft.run, cid, id=f"draft-{cid}")
+            except WorkflowAlreadyStartedError:
+                failed[cid] = "이미 실행 중"
+            except ChildWorkflowError as e:
+                failed[cid] = _cause(e)
+        self._stage = "완료"
+        if failed:
+            raise ApplicationError(
+                f"초안 실패 {len(failed)}건: " + ", ".join(f"{k} — {v}" for k, v in failed.items()),
+                non_retryable=True)
+        return {"done": done, "failed": failed}
+
+
 @workflow.defn
 class DailyScan:
-    """무인 일일 스캔: sync → fetch → 미점수 전부 judge(예산 강등) → proposals.json 갱신."""
+    """무인 일일 스캔: sync → fetch → 미판정 전부 judge(예산 강등) → proposals.json 갱신.
+    판정 결과는 exclude까지 전부 저장한다 — 다음 스캔이 같은 공고를 다시 판정하지 않도록."""
 
     def __init__(self) -> None:
         self._stage = "시작"
@@ -113,13 +161,13 @@ class DailyScan:
                     self._failed.append(t["id"])   # 재시도 소진 — 미점수로 남음
                 else:
                     self._judged.append(r)
-                    spent += r["usage"].get("in", 0) + r["usage"].get("out", 0)
+                    if not r.get("cached"):   # 캐시 적중은 LLM 지출 0 — 예산에 안 센다
+                        spent += r["usage"].get("in", 0) + r["usage"].get("out", 0)
             self._stage = f"판정 {min(i + params.chunk, len(targets))}/{len(targets)}"
         self._spent = spent
 
         self._stage = "정리"
-        proposals = [j for j in self._judged if not j["exclude"]]
-        n = await workflow.execute_activity("save_proposals", proposals, **_IO_OPTS)
+        n = await workflow.execute_activity("save_proposals", self._judged, **_IO_OPTS)
 
         self._stage = "완료"
         return {
@@ -132,7 +180,8 @@ class DailyScan:
 
 @workflow.defn
 class Publish:
-    """웹앱 승인 버튼이 시작. 등재·거부 반영 → refresh → build → 리포트."""
+    """웹앱 승인 버튼이 시작. 등재·거부 반영 → refresh → 리포트 → 산출물 커밋, 그 뒤 승인건
+    초안은 Drafts 자식 워크플로에 넘기고 바로 끝난다."""
 
     def __init__(self) -> None:
         self._stage = "시작"
@@ -168,17 +217,6 @@ class Publish:
         out["refresh"] = await workflow.execute_activity(
             "refresh_due", **_IO_OPTS)
 
-        self._stage = "지원서류 초안"
-        drafts: dict[str, str] = {}
-        for a in approved:
-            try:
-                drafts[a["id"]] = await _draft(
-                    {k: a[k] for k in ("id", "company", "title", "src", "url")})
-            except Exception as e:
-                # 등재는 이미 끝났으므로 여기서 멈추지 않는다 — `worker draft <id>`로 다시 만든다
-                drafts[a["id"]] = f"실패: {e}"
-        out["drafts"] = drafts
-
         self._stage = "report"
         stats = {
             "published": len(approved), "rejected": len(params.rejects),
@@ -189,6 +227,16 @@ class Publish:
 
         self._stage = "산출물 커밋"
         out["outputs"] = await workflow.execute_activity("commit_outputs", **_IO_OPTS)
+
+        # commit_outputs 뒤에 시작해야 같은 clone에서 git 작업이 겹치지 않는다(index.lock 경합).
+        # ABANDON — Publish는 여기서 끝나 대시보드 잠금이 풀리고 Drafts는 독립 실행된다.
+        out["drafts"] = ""
+        if approved:
+            child = await workflow.start_child_workflow(
+                Drafts.run, [a["id"] for a in approved],
+                id=f"drafts-{workflow.info().workflow_id}",
+                parent_close_policy=workflow.ParentClosePolicy.ABANDON)
+            out["drafts"] = child.id
 
         self._stage = "완료"
         return out

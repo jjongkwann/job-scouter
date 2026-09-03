@@ -13,10 +13,10 @@ from datetime import date
 from temporalio import activity
 
 from jobscouter.config import (APP_FILES, APP_EXAMPLE, APPLICATIONS, DATA, FACTBASE, RESUME,
-                               JOBFEED, JUDGE_MODEL, PROMPTS, JudgeInput, Judgment)
+                               JOBFEED, JUDGE_MODEL, PROMPTS, RUBRIC_VERSION, JudgeInput,
+                               Judgment)
 
 
-RUBRIC_VERSION = "v1"
 EFFORT = "medium"
 CLAUDE = os.environ.get("JOBSCOUTER_CLAUDE", "claude")
 _CAPS = [35, 25, 20, 20]
@@ -193,10 +193,13 @@ def _example_docs() -> str:
 
 
 @activity.defn
-def draft_application(company: str, title: str, posting: str) -> dict[str, str]:
-    """승인 공고 1건의 지원서류 5종 초안. 사실베이스에 없는 주장 금지, 앵커 회사
-    (APP_EXAMPLE)의 형식(섹션·표)을 따른다. 스키마 없음 — 자유 텍스트를
-    `=== FILE: 이름 ===` 구분자로 split. 5개 미만이면 재시도용 예외."""
+def draft_application(target: dict, posting: str) -> dict[str, str]:
+    """승인 공고 1건의 지원서류 5종 초안. target은 listed_target dict(company·title·scores·reason).
+    판정의 약한 축·감점 사유를 프롬프트에 실어 그 약점을 보완하는 근거를 앞세우게 한다.
+    사실베이스에 없는 주장 금지, 앵커 회사(APP_EXAMPLE)의 형식(섹션·표)만 따른다.
+    스키마 없음 — 자유 텍스트를 `=== FILE: 이름 ===` 구분자로 split. APP_FILES 이름이
+    하나라도 빠지면(개수 부족·파일명 오타) 재시도용 예외 — 이 검증은 LLM 단계에 있어야
+    io 단계가 아니라 LLM 호출이 재시도된다."""
     readme_path = APPLICATIONS / "README.md"
     rules = readme_path.read_text() if readme_path.exists() else ""
     system = (
@@ -205,21 +208,33 @@ def draft_application(company: str, title: str, posting: str) -> dict[str, str]:
         f"<지원서류 규칙>\n{rules}\n</지원서류 규칙>\n\n"
         f"<형식 예시 — {APP_EXAMPLE}사>\n{_example_docs()}\n</형식 예시>"
     )
+    scores = list(target["scores"]) + [0] * (5 - len(target["scores"]))
+    axes = ["스택", "도메인", "레벨", "역할"]
+    judgment = "\n".join(
+        [f"{a}: {v}/{m}" for a, v, m in zip(axes, scores, _CAPS)]
+        + [f"감점: {scores[4]}", f"총점: {sum(scores)}", f"사유: {target['reason']}"])
     prompt = (
-        f"회사: {company}\n포지션: {title}\n\n공고 전문:\n{posting}\n\n"
+        f"회사: {target['company']}\n포지션: {target['title']}\n\n"
+        f"<판정>\n{judgment}\n</판정>\n\n공고 전문:\n{posting}\n\n"
         "위 정보로 지원서류 5개 문서를 작성하라. `=== FILE: 파일명 ===` 구분자로 나눠 "
         "하나의 출력으로 이어 써라. 파일명은 정확히 이 순서·이름으로: "
-        + ", ".join(APP_FILES) + ". "
-        "사실베이스에 없는 주장은 절대 하지 말 것. 형식 예시의 섹션·표 구성을 유지할 것."
+        + ", ".join(APP_FILES) + ".\n"
+        "- 판정에서 점수가 낮은 축과 감점 사유를 확인하고, 사실베이스 안에서 그 약점을 보완하는 "
+        "근거를 1_맞춤_이력서·2_자기소개서에 우선 배치할 것.\n"
+        "- 공고의 자격요건·우대사항 항목마다 사실베이스 근거를 대응시킬 것. 근거가 없는 항목은 "
+        "없다고 두고 지어내지 말 것. 사실베이스에 없는 주장은 절대 하지 말 것.\n"
+        "- 형식 예시 문서의 회사 고유 내용(회사명·프로젝트명·수치·사례)은 절대 옮기지 말고 "
+        "섹션·표 구조만 따를 것."
     )
     d = _claude(prompt, system, max_usd=1.0, timeout=600)
     files: dict[str, str] = {}
     for chunk in d["result"].split("=== FILE: ")[1:]:
         name, _, body = chunk.partition(" ===")
         files[name.strip()] = body.strip("\n")
-    if len(files) < 5:
-        raise RuntimeError(f"지원서류 초안 {len(files)}개뿐 — 5개 필요 (재시도)")
-    return files
+    missing = [n for n in APP_FILES if n not in files]
+    if missing:
+        raise RuntimeError(f"지원서류 파일 누락 {missing} — 출력 {sorted(files)} (재시도)")
+    return {n: files[n] for n in APP_FILES}
 
 
 @activity.defn

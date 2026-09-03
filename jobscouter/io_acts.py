@@ -5,20 +5,22 @@ import re
 import ssl
 import subprocess
 import urllib.request
-from datetime import date
+from datetime import date, datetime
 
 from temporalio import activity
 
+from jobscouter.candidates import KST, days_left, dues
 from jobscouter.config import (APP_FILES, APPLICATIONS, CHAT_DIR, CHAT_DONE, JOBFEED,
                                 PKB_CATEGORIES, PKB_INDEX, PKB_STATUSES, PROPOSALS,
-                                RESUME_PROPOSALS, SID_RE, Target, _app_slug, _norm, git_path_at,
-                                job_cid, resume_target)
+                                RESUME_PROPOSALS, RUBRIC_VERSION, SID_RE, Target, _app_slug,
+                                _norm, git_path_at, job_cid, resume_target)
 from jobscouter.search import es
 
 
-# proposals.json에 남기는 필드 — usage·exclude·cached는 판정 내부용이라 뺀다
+# proposals.json에 남기는 필드 — usage·cached는 판정 내부용이라 뺀다. exclude 판정도 남겨야
+# 다음 스캔의 load_targets가 같은 공고를 다시 판정하지 않는다(화면에는 api가 걸러 안 보인다)
 PROP_FIELDS = ["id", "company", "title", "url", "src", "scores", "total",
-               "reason", "quotes", "confidence", "rubric_version"]
+               "reason", "quotes", "confidence", "rubric_version", "exclude"]
 RESUME_STATE = JOBFEED.parent / "data" / "resume_state.json"   # 데이터 repo 내 — 마지막 반영 PKB 해시
 PKB_TEXT_CAP = 40_000   # propose_resume_update 입력용 캡
 _ADD_HEADING = "## 미분류 추가(자동 제안 승인)"
@@ -56,6 +58,20 @@ def _has_remote(repo: str) -> bool:
     return bool(r.stdout.strip())
 
 
+def _git_commit(repo: str, message: str) -> bool:
+    """커밋되면 True, 스테이지된 변경이 없으면 False. 그 외 실패(index.lock 경합·작성자
+    미설정 등)는 RuntimeError — '변경 없음'으로 삼키면 activity 재시도가 안 걸린다."""
+    r = subprocess.run(["git", "-C", repo, "commit", "-m", message],
+                       capture_output=True, text=True)
+    if r.returncode == 0:
+        return True
+    out = r.stdout + r.stderr
+    if any(k in out for k in ("nothing to commit", "nothing added to commit",
+                              "no changes added to commit")):
+        return False
+    raise RuntimeError(f"git commit 실패\n{out.strip()[-500:]}")
+
+
 @activity.defn
 def sync_repo() -> str:
     """사이클 시작 시 jobfeed repo를 원격과 동기화(서버 워커 ↔ 작업 머신).
@@ -69,8 +85,7 @@ def sync_repo() -> str:
                             capture_output=True, text=True, timeout=30).stdout
     if status.strip():
         subprocess.run(["git", "-C", repo, "add", "-A"], check=True)
-        subprocess.run(["git", "-C", repo, "commit", "-m", "job-scouter: 미커밋 산출물 정리"],
-                       capture_output=True, text=True)
+        _git_commit(repo, "job-scouter: 미커밋 산출물 정리")
     r = subprocess.run(["git", "-C", repo, "pull", "--ff-only"],
                        capture_output=True, text=True, timeout=120)
     out = (r.stdout + r.stderr).strip()
@@ -80,11 +95,23 @@ def sync_repo() -> str:
     return out.splitlines()[-1] if out else "완료"
 
 
+def _expired(due, today: date) -> bool:
+    """'YYYY-MM-DD' 마감이 오늘(KST)보다 이전이면 참. '상시'·없음·못 읽는 값은 거짓."""
+    left = days_left(due, today)
+    return left is not None and left < 0
+
+
 @activity.defn
 def load_targets() -> list[Target]:
-    """jobs.jsonl − (rows ∪ skipped ∪ 🚫회사) = 미점수 전부."""
+    """jobs.jsonl − (rows ∪ skipped ∪ 🚫회사 ∪ 현 루브릭 판정 완료 ∪ 마감) = 판정할 것 전부.
+    proposals.json의 판정(pending·exclude 모두)은 rubric_version이 현 버전일 때만 제외 —
+    루브릭을 올리면 옛 판정은 전 건 재판정 대상으로 남는다."""
     cand = json.loads((JOBFEED / "candidates.json").read_text())
     known = {str(r[2]) for r in cand["rows"]} | set(cand["skipped"])
+    prop_path = JOBFEED / PROPOSALS
+    props = json.loads(prop_path.read_text()) if prop_path.exists() else {}
+    known |= {pid for pid, p in props.items() if p.get("rubric_version") == RUBRIC_VERSION}
+    today = datetime.now(KST).date()
     bad = {_norm(r[1]) for r in cand["rows"] if r[4] and r[4][0] == "bad"}
     rep = JOBFEED / "기업평판.md"
     if rep.exists():
@@ -96,7 +123,8 @@ def load_targets() -> list[Target]:
     for line in (JOBFEED / "jobs.jsonl").read_text().splitlines():
         j = json.loads(line)
         cid = job_cid(j)
-        if cid in known or cid in seen or _norm(j["company"]) in bad:
+        if (cid in known or cid in seen or _norm(j["company"]) in bad
+                or _expired(j.get("due"), today)):
             continue
         seen.add(cid)
         out.append(Target(id=cid, company=j["company"], title=j["title"],
@@ -181,32 +209,21 @@ def commit_rows(approved: list[dict], dry_run: bool = False) -> str:
             json.dumps(r, ensure_ascii=False) for r in rows)
     cand["rows"].extend(rows)
     path.write_text(json.dumps(cand, ensure_ascii=False, indent=1))
-    repo = str(JOBFEED.parent)
-    subprocess.run(["git", "-C", repo, "add", "jobfeed/candidates.json"], check=True)
-    r = subprocess.run(["git", "-C", repo, "commit", "-m",
-                        f"job-scouter: 자동 등재 {len(rows)}건 (rubric {vers.pop()})"],
-                       capture_output=True, text=True)
-    msg = f"등재 {len(rows)}건 · git: {'커밋됨' if r.returncode == 0 else r.stdout + r.stderr}"
-    if r.returncode == 0 and _has_remote(repo):
-        p = subprocess.run(["git", "-C", repo, "push"], capture_output=True, text=True)
-        if p.returncode != 0:
-            raise RuntimeError(f"git push 실패\n{p.stdout + p.stderr}")
-        msg += " · push됨"
-    return msg
+    git = _commit_and_push(["jobfeed/candidates.json"],
+                           f"job-scouter: 자동 등재 {len(rows)}건 (rubric {vers.pop()})")
+    return f"등재 {len(rows)}건 · git: {git}"
 
 
 def _commit_and_push(paths: list[str], message: str) -> str:
     """git add한 paths를 커밋(+원격 있으면 push). 변경 없으면 git commit이 자연히
-    no-op — 여기서 따로 diff를 재구현하지 않는다."""
+    no-op — 여기서 따로 diff를 재구현하지 않는다. 그 외 commit 실패는 RuntimeError."""
     repo = str(JOBFEED.parent)
     # 데이터 repo의 .gitignore에 걸린 경로(예: new.md)는 git add가 exit 1 — 걸러낸다
     paths = [p for p in paths if subprocess.run(
         ["git", "-C", repo, "check-ignore", "-q", p]).returncode != 0]
     if paths:
         subprocess.run(["git", "-C", repo, "add", "--", *paths], check=True)
-    r = subprocess.run(["git", "-C", repo, "commit", "-m", message],
-                       capture_output=True, text=True)
-    if r.returncode != 0:
+    if not _git_commit(repo, message):
         return "변경 없음"
     msg = "커밋됨"
     if _has_remote(repo):
@@ -219,9 +236,10 @@ def _commit_and_push(paths: list[str], message: str) -> str:
 
 @activity.defn
 def save_proposals(judged: list[dict]) -> int:
-    """비제외 judged를 proposals.json에 id로 병합 + 이미 등재·거부된 id 정리.
-    같은 커밋에 jobs.jsonl·new.md(fetch 산출물, 존재하는 것만)도 실어야 다음
-    사이클의 sync_repo pull이 dirty 파일 충돌 없이 끝난다. 반환: 현재 proposals 건수."""
+    """judged(exclude 포함)를 proposals.json에 id로 병합 + 이미 등재·거부된 id와
+    마감 지난 건(jobs.jsonl due < 오늘 KST) 정리. 같은 커밋에 jobs.jsonl·new.md(fetch
+    산출물, 존재하는 것만)도 실어야 다음 사이클의 sync_repo pull이 dirty 파일 충돌 없이
+    끝난다. 반환: 화면에 뜨는(비제외) proposals 건수."""
     path = JOBFEED / PROPOSALS
     props = json.loads(path.read_text()) if path.exists() else {}
     for j in judged:
@@ -231,12 +249,15 @@ def save_proposals(judged: list[dict]) -> int:
 
     cand = json.loads((JOBFEED / "candidates.json").read_text())
     known = {str(r[2]) for r in cand["rows"]} | set(cand["skipped"])
-    props = {pid: rec for pid, rec in props.items() if pid not in known}
+    due_map, today = dues(), datetime.now(KST).date()
+    props = {pid: rec for pid, rec in props.items()
+             if pid not in known and not _expired(due_map.get(pid), today)}
     path.write_text(json.dumps(props, ensure_ascii=False, indent=1))
 
+    n = sum(1 for rec in props.values() if not rec.get("exclude"))
     names = [n for n in ("jobs.jsonl", "new.md", PROPOSALS) if (JOBFEED / n).exists()]
-    _commit_and_push([f"jobfeed/{n}" for n in names], f"job-scouter: 스캔 — proposals {len(props)}건")
-    return len(props)
+    _commit_and_push([f"jobfeed/{n}" for n in names], f"job-scouter: 스캔 — proposals {n}건")
+    return n
 
 
 @activity.defn
@@ -249,13 +270,15 @@ def load_proposals(ids: list[str]) -> list[dict]:
 
 @activity.defn
 def listed_target(cid: str) -> dict:
-    """등재된 공고 id → Target dict — Publish에서 LLM이 실패해 잃은 초안을 다시 만들 때.
-    회사·제목은 candidates.json 행에서, src·url은 id 관례(j접두=점핏)에서 정한다."""
+    """등재된 공고 id → Target dict(+판정 scores·reason) — Draft가 초안을 (재)생성할 때.
+    회사·제목·점수·사유는 candidates.json 행에서, src·url은 id 관례(j접두=점핏)에서 정한다.
+    scores·reason은 draft_application이 약한 축을 보완하는 근거를 앞세우는 데 쓴다."""
     cand = json.loads((JOBFEED / "candidates.json").read_text())
     for r in cand["rows"]:
         if str(r[2]) == cid:
             jumpit = cid.startswith("j")
             return {"id": cid, "company": r[1], "title": r[0],
+                    "scores": list(r[3]), "reason": r[5] or "",
                     "src": "jumpit" if jumpit else "wanted",
                     "url": (f"https://jumpit.saramin.co.kr/position/{cid[1:]}" if jumpit
                             else f"https://www.wanted.co.kr/wd/{cid}")}
@@ -285,13 +308,15 @@ def reject_proposals(rejects: list[dict]) -> int:
 @activity.defn
 def write_application(target: dict, files: dict[str, str]) -> str:
     """지원서류 5종(files) + README(공고 링크·파일 목록·체크리스트 스텁)을
-    applications/{slug}/에 쓴다. 이미 사람이 작업 중인 폴더는 덮어쓰지 않고
-    `_draft` 접미로 비켜 쓴다. commit+push.
+    applications/{회사slug}_{공고id}/에 쓴다 — 같은 회사의 다른 공고는 별도 폴더.
+    그 폴더가 이미 있으면(사람이 작업 중) 절대 건드리지 않고 `_draft` 접미 폴더에 쓴다.
+    `_draft`는 재생성 슬롯 하나다 — 재생성할 때마다 의도적으로 덮어쓴다(이전 재생성본은
+    git 이력에 있다). commit+push.
 
-    README 첫 줄의 `공고:` URL이 **후보목록과의 유일한 연결 키**다 — 폴더명(회사명 slug)은
-    사람이 영문으로 바꿔 두는 일이 잦아 회사명으로는 못 잇는다(web.job_index 참조)."""
+    README 첫 줄의 `공고:` URL이 **후보목록과의 유일한 연결 키**다 — 폴더명은 사람이
+    바꿔 두는 일이 잦아 이름으로는 못 잇는다(candidates.job_index 참조)."""
     company = target["company"]
-    slug = _app_slug(company)   # 정규식이 경로 문자를 전부 제거 — 탈출 불가
+    slug = f"{_app_slug(company)}_{target['id']}"   # 정규식이 경로 문자를 전부 제거 — 탈출 불가
     files = {n: c for n, c in files.items() if n in APP_FILES}  # LLM이 준 파일명은 allowlist만
     if len(files) < len(APP_FILES):
         raise ValueError(f"지원서류 파일 부족: {sorted(files)}")

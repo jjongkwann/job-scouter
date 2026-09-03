@@ -27,12 +27,19 @@ def repo(tmp_path, monkeypatch):
                 "scores": [20, 15, 15, 12, 0], "total": 62,
                 "reason": "부분 일치", "quotes": [], "confidence": 0.5,
                 "rubric_version": "v1", "judged_at": "2026-08-24"},
+        # exclude 판정 — 재판정 방지용으로만 남고 화면에는 안 뜬다
+        "444": {"id": "444", "company": "제외회사", "title": "무관 직무",
+                "url": "https://example.com/444", "src": "wanted",
+                "scores": [5, 0, 5, 0, -25], "total": -15, "exclude": True,
+                "reason": "직무 불일치", "quotes": [], "confidence": 0.9,
+                "rubric_version": "v1", "judged_at": "2026-08-24"},
     }, ensure_ascii=False))
     # 마감은 proposals.json이 아니라 jobs.jsonl에 있다
     soon = (datetime.now(cands.KST).date() + timedelta(days=10)).isoformat()
     (jobfeed / "jobs.jsonl").write_text(
         json.dumps({"src": "wanted", "id": 111, "due": "2020-01-01"}) + "\n"
-        + json.dumps({"src": "wanted", "id": 333, "due": soon}) + "\n")
+        + json.dumps({"src": "wanted", "id": 333, "due": soon}) + "\n"
+        + json.dumps({"src": "wanted", "id": 444, "due": soon}) + "\n")
     (jobfeed / "candidates.json").write_text(json.dumps({
         "rows": [["백엔드 엔지니어", "테스트회사", 222, [30, 18, 20, 16, -5], None,
                   "자동판정", [], None]],
@@ -82,11 +89,11 @@ def client(repo):
 def test_dashboard_json(client):
     d = client.get("/api/dashboard").json()
     ids = [p["id"] for p in d["proposals"]]
-    assert ids == ["111", "333"]                      # total 내림차순
+    assert ids == ["111", "333"]                      # total 내림차순 · exclude(444)는 빠진다
     p = d["proposals"][0]
     assert p["cells"][0] == [30, "hi"] and p["cells"][4] == [-5, "pen"] and p["tier"] == "t2"
     assert p["due_cls"] == "gone" and p["rail"] == "none" and p["busy"] is False
-    assert d["unresearched"] == ["테스트회사"] and d["stats"]["pending"] == 2
+    assert d["unresearched"] == ["테스트회사"] and d["stats"]["pending"] == 2   # 제외회사는 미조사에도 없다
 
 
 def test_dashboard_marks_busy_rows_when_publish_running(client, monkeypatch):
@@ -108,10 +115,21 @@ def test_publish_starts_workflow(client, monkeypatch):
         return "publish-1"
     monkeypatch.setattr(api, "start_publish", start)
     r = client.post("/api/publish", json={"ids": ["111"],
-                                          "rejects": [{"id": "333", "why": "  너무 멀다 "},
-                                                      {"id": "444", "why": "  "}]})
+                                          "rejects": [{"id": "333", "why": "  너무 멀다 "}]})
     assert r.json() == {"workflow_id": "publish-1"}
     assert got == {"ids": ["111"], "rejects": [{"id": "333", "why": "너무 멀다"}]}
+
+
+def test_publish_rejects_overlap_between_approve_and_reject(client):
+    r = client.post("/api/publish", json={"ids": ["111"],
+                                          "rejects": [{"id": "111", "why": "너무 멀다"}]})
+    assert r.status_code == 400 and "111" in r.json()["detail"]
+
+
+def test_publish_rejects_empty_reason(client):
+    r = client.post("/api/publish", json={"ids": [],
+                                          "rejects": [{"id": "333", "why": "  "}]})
+    assert r.status_code == 400 and "333" in r.json()["detail"]
 
 
 def test_candidates_json(client):
@@ -250,7 +268,15 @@ def test_applications(client, monkeypatch):
     assert d["orphans"][0]["slug"] == "no_link" and d["orphans"][0]["cls"] == "bad"
     j = client.get("/api/applications/job/222").json()
     assert j["folder"]["slug"] == "test_co" and set(j["docs"]) == {"0_JD.md", "1_맞춤_이력서.md"}
-    assert j["drafting"] is False
+    assert j["drafting"] is False and [f["slug"] for f in j["folders"]] == ["test_co"]
+    # 재생성 슬롯(_draft)이 같은 공고를 가리키면 folders에 둘 다 오고, 기본은 원본·?folder=로 고른다
+    apps = config.APPLICATIONS
+    (apps / "test_co_draft").mkdir()
+    (apps / "test_co_draft" / "README.md").write_text("공고: https://www.wanted.co.kr/wd/222")
+    j = client.get("/api/applications/job/222").json()
+    assert j["folder"]["slug"] == "test_co" and [f["slug"] for f in j["folders"]] == ["test_co", "test_co_draft"]
+    j = client.get("/api/applications/job/222", params={"folder": "test_co_draft"}).json()
+    assert j["folder"]["slug"] == "test_co_draft" and set(j["docs"]) == {"README.md"}
     assert client.get("/api/applications/job/999").status_code == 404
     assert client.get("/api/applications/test_co").json()["linked_cid"] == "222"
     assert client.get("/api/applications/no_link").json()["linked_cid"] is None

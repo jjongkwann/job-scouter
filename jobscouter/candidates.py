@@ -183,5 +183,11 @@ def app_folders() -> list[dict]:
 
 
 def job_index() -> dict[str, dict]:
-    """{공고 id: 폴더}. 한 폴더가 공고 여럿을 가리키면 그 전부가 같은 폴더로 온다."""
-    return {cid: f for f in app_folders() for cid in f["ids"]}
+    """{공고 id: 폴더}. 한 폴더가 공고 여럿을 가리키면 그 전부가 같은 폴더로 온다.
+    여러 폴더가 같은 공고를 가리키면 정렬상 앞 폴더가 이긴다 — 원본 `x_222`가 재생성 슬롯
+    `x_222_draft`보다 앞이라 화면은 사람이 작업 중인 원본을 가리킨다."""
+    out: dict[str, dict] = {}
+    for f in app_folders():
+        for cid in f["ids"]:
+            out.setdefault(cid, f)
+    return out

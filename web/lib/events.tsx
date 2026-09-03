@@ -10,6 +10,7 @@ export const WF_LABEL: Record<string, string> = {
   ResumeSync: '이력서 갱신 제안',
   ApplyResume: '제안 반영',
   Draft: '지원서류 초안',
+  Drafts: '지원서류 초안(일괄)',
   RevertFile: '되돌리기',
   ResumeChat: '대화 턴',
   EndChat: '대화 종료',
