@@ -77,7 +77,7 @@ import하지 않는다(테스트로 강제). API 키 불필요. 호출당 지출
 | jobfeed | `JOBSCOUTER_JOBFEED` | `candidates.json`·`jobs.jsonl`·`proposals.json`·`기업평판.md`·`reports/*.md` |
 | 수집 설정 | (jobfeed 상위) | `settings.json` — 수집 키워드와 통근 밴드(`{"keywords": [...], "zones": [[밴드, "라벨", "주소패턴"], ...]}`) |
 | 사실베이스 | `JOBSCOUTER_FACTBASE` | 본인 확인 완료 경력 사실 — judge의 감점 근거 |
-| 루브릭 | `JOBSCOUTER_PROMPTS` | `rubric_v1.md` — `prompts/rubric_v1.example.md`를 채워서 |
+| 루브릭 | `JOBSCOUTER_PROMPTS` | `rubric_v2.md` — `prompts/rubric_v2.example.md`를 채워서 |
 
 서버 설치: `deploy/SERVER_SETUP.md`. 설계·계획 문서: `docs/specs/` · `docs/plans/`.
 

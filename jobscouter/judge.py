@@ -36,7 +36,7 @@ SCORE_SCHEMA = {
                    "minItems": 5, "maxItems": 5,
                    "description": "[스택0-35, 도메인0-25, 레벨0-20, 역할0-20, 감점-25~0]"},
         "exclude": {"type": "boolean",
-                    "description": "핵심 업무 통째 미보유·직무 불일치 등 등재 불가"},
+                    "description": "등재 불가 — 필수 주력 스택이 사실베이스 보유 스킬에 없음·직무 불일치·핵심 업무 통째 미보유·스킬 대조 불가"},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
         "quotes": {"type": "array", "items": {"type": "string"},
                    "description": "근거가 된 자격요건 원문 인용 (짧게, 3개 이내)"},

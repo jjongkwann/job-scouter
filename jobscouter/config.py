@@ -21,8 +21,10 @@ Q_WF, Q_IO, Q_LLM = "jobscout-wf", "jobscout-io", "jobscout-llm"
 Q_CHAT = "jobscout-chat"                       # 판정 레이트리밋과 분리 — 채팅이 판정 뒤에 안 밀리게
 JUDGE_MODEL = _env("JOBSCOUTER_MODEL", "claude-sonnet-5")
 # 루브릭 버전 — judge(캐시 키·판정 기록)와 load_targets(현 버전 판정 완료 건 제외)가 공유.
-# 올리면 옛 버전 판정은 전부 재판정 대상이 된다
-RUBRIC_VERSION = "v1"
+# 올리면 옛 버전의 pending 판정은 재판정 대상이 된다. exclude 판정은 버전과 무관하게 유지한다 —
+# 제외는 늘리는 방향으로만 바뀌어 왔고, 제외건 재판정은 LLM 지출만 낸다
+# v2(2026-09-07): 스택 불일치·스킬 대조 불가를 exclude로 — 기준을 루브릭의 언어 이름이 아니라 사실베이스 보유 스킬에서 읽는다
+RUBRIC_VERSION = "v2"
 PROPOSALS = "proposals.json"   # JOBFEED 아래 — 판정됐지만 등재/거부 전인 후보
 RESUME_PROPOSALS = "resume_proposals.json"   # JOBFEED 아래 — ResumeSync 제안, 사람 승인 대기
 

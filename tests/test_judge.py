@@ -8,7 +8,7 @@ import jobscouter.workflow  # noqa: F401
 _LEAK = "jobscouter.judge" in sys.modules  # io·workflow 로드 직후 상태를 기록
 
 from jobscouter import judge as J  # noqa: E402
-from jobscouter.config import JudgeInput, Target  # noqa: E402
+from jobscouter.config import RUBRIC_VERSION, JudgeInput, Target  # noqa: E402
 
 
 def test_io_modules_never_import_judge():
@@ -30,7 +30,7 @@ def test_cache_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(J, "_CACHE", tmp_path / "j.jsonl")
     monkeypatch.setattr(J, "DATA", tmp_path)
     monkeypatch.setattr(J, "factbase_hash", lambda: "abc123")
-    (tmp_path / "rubric_v1.md").write_text("루브릭\n{factbase}")
+    (tmp_path / f"rubric_{RUBRIC_VERSION}.md").write_text("루브릭\n{factbase}")
     (tmp_path / "facts.md").write_text("사실")
     monkeypatch.setattr(J, "PROMPTS", tmp_path)
     monkeypatch.setattr(J, "FACTBASE", tmp_path / "facts.md")
@@ -56,7 +56,7 @@ def test_cache_roundtrip(tmp_path, monkeypatch):
     assert len(called) == 1                       # 두 번째는 claude 안 감
     assert called[0][1] == "루브릭\n사실"          # {factbase} 치환
     assert j1.usage["in"] == 1000 and j1.usage["usd"] == 0.01
-    assert j2.total == 84 and j2.rubric_version == "v1"
+    assert j2.total == 84 and j2.rubric_version == RUBRIC_VERSION
 
 
 def _setup_app_env(tmp_path, monkeypatch):

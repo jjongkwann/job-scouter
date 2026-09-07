@@ -43,7 +43,7 @@ try:  # python.org 빌드 대비 — fetch_jobs.py와 동일 처리
 except ImportError:
     _SSL = None
 _HDR = {"User-Agent": "Mozilla/5.0", "wanted-os": "web"}
-REQ_CAP = 300  # DESIGN: requirements 300자 캡
+REQ_CAP = 2000  # judge 입력 캡 — 루브릭+사실베이스 ~25k 토큰이라 원문 2000자는 비용에 안 잡힌다. 300자일 때 65건 중 22건이 스택 요건 앞에서 잘렸다
 POSTING_CAP = 6000  # 지원서류 초안용 공고 전문 캡
 
 
@@ -103,14 +103,15 @@ def _expired(due, today: date) -> bool:
 
 @activity.defn
 def load_targets() -> list[Target]:
-    """jobs.jsonl − (rows ∪ skipped ∪ 🚫회사 ∪ 현 루브릭 판정 완료 ∪ 마감) = 판정할 것 전부.
-    proposals.json의 판정(pending·exclude 모두)은 rubric_version이 현 버전일 때만 제외 —
-    루브릭을 올리면 옛 판정은 전 건 재판정 대상으로 남는다."""
+    """jobs.jsonl − (rows ∪ skipped ∪ 🚫회사 ∪ 판정 완료 ∪ 마감) = 판정할 것 전부.
+    proposals.json의 exclude 판정은 루브릭 버전과 무관하게 완료로 본다. pending 판정은 현 버전일
+    때만 완료 — 루브릭을 올리면 화면에 떠 있던 것만 재판정된다."""
     cand = json.loads((JOBFEED / "candidates.json").read_text())
     known = {str(r[2]) for r in cand["rows"]} | set(cand["skipped"])
     prop_path = JOBFEED / PROPOSALS
     props = json.loads(prop_path.read_text()) if prop_path.exists() else {}
-    known |= {pid for pid, p in props.items() if p.get("rubric_version") == RUBRIC_VERSION}
+    known |= {pid for pid, p in props.items()
+              if p.get("exclude") or p.get("rubric_version") == RUBRIC_VERSION}
     today = datetime.now(KST).date()
     bad = {_norm(r[1]) for r in cand["rows"] if r[4] and r[4][0] == "bad"}
     rep = JOBFEED / "기업평판.md"
@@ -134,18 +135,23 @@ def load_targets() -> list[Target]:
 
 @activity.defn
 def fetch_requirements(t: Target) -> str:
-    """자격요건 원문. 원티드: detail.requirements / 점핏: qualifications(복수!)+responsibility 첫 2줄.
+    """자격요건 원문 + [우대사항]. 원티드: detail.requirements·preferred_points / 점핏:
+    qualifications(복수!)+responsibility 첫 2줄+preferredRequirements. 우대는 루브릭이 제외
+    판단(직군·주력 스택 파악)에만 쓴다 — 필수가 빈 공고는 우대에만 스택이 적혀 있다.
     점핏 단수 qualification은 조용히 None — '필수요건 없음' 오독 사고 이력(SKILL.md)."""
     if t.src == "wanted":
-        d = _get(f"https://www.wanted.co.kr/api/v4/jobs/{t.id}")
-        text = (d["job"]["detail"].get("requirements") or "").strip()
+        detail = _get(f"https://www.wanted.co.kr/api/v4/jobs/{t.id}")["job"]["detail"]
+        text = (detail.get("requirements") or "").strip()
+        pref = (detail.get("preferred_points") or "").strip()
     else:
-        d = _get(f"https://jumpit-api.saramin.co.kr/api/position/{t.id[1:]}")
-        r = d["result"]
+        r = _get(f"https://jumpit-api.saramin.co.kr/api/position/{t.id[1:]}")["result"]
         resp = "\n".join((r.get("responsibility") or "").splitlines()[:2])
         text = f"{(r.get('qualifications') or '').strip()}\n[주요업무 발췌] {resp}".strip()
+        pref = (r.get("preferredRequirements") or "").strip()
     if not text:
         raise RuntimeError(f"{t.id}: 자격요건 없음 — 공고 내려갔거나 API 변경")
+    if pref:
+        text += f"\n[우대사항] {pref}"
     return text[:REQ_CAP]
 
 

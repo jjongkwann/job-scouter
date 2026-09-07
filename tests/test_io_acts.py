@@ -29,12 +29,14 @@ def _touch_jobfeed(tmp_path, monkeypatch):
         {"src": "wanted", "id": 666, "title": "F", "company": "판정회사", "url": "u"},
         {"src": "wanted", "id": 777, "title": "G", "company": "옛판정회사", "url": "u", "due": "상시"},
         {"src": "wanted", "id": 888, "title": "H", "company": "마감회사", "url": "u", "due": "2020-01-01"},
+        {"src": "wanted", "id": 999, "title": "I", "company": "옛제외회사", "url": "u"},
     ]
     (tmp_path / "jobs.jsonl").write_text(
         "\n".join(json.dumps(j, ensure_ascii=False) for j in jobs))
     (tmp_path / "proposals.json").write_text(json.dumps({
         "666": {"id": "666", "exclude": True, "rubric_version": config.RUBRIC_VERSION},
         "777": {"id": "777", "exclude": False, "rubric_version": "v0"},
+        "999": {"id": "999", "exclude": True, "rubric_version": "v0"},
     }))
 
 
@@ -42,8 +44,8 @@ def test_load_targets(tmp_path, monkeypatch):
     _touch_jobfeed(tmp_path, monkeypatch)
     got = io_acts.load_targets()
     ids = [t.id for t in got]
-    # 111 등재됨·222 등재됨·333 스킵·444 🚫회사 정규화 매칭·666 현 루브릭 판정(exclude여도)·
-    # 888 마감 지남 → 남는 건 j555와 옛 루브릭 판정 777(재판정 대상)
+    # 111 등재됨·222 등재됨·333 스킵·444 🚫회사 정규화 매칭·666 현 루브릭 판정·888 마감 지남·
+    # 999 옛 루브릭 exclude(버전 무관 유지) → 남는 건 j555와 옛 루브릭 pending 777(재판정 대상)
     assert ids == ["j555", "777"]
 
 
@@ -51,12 +53,17 @@ def test_fetch_requirements_jumpit_plural_and_cap(monkeypatch):
     monkeypatch.setattr(io_acts, "_get", lambda url: {
         "result": {"qualifications": "필수: " + "가" * 400,
                    "qualification": None,  # 단수 키 함정 — 이걸 읽으면 None
-                   "responsibility": "줄1\n줄2\n줄3"}})
+                   "responsibility": "줄1\n줄2\n줄3",
+                   "preferredRequirements": "Django 경험"}})
     t = Target(id="j555", company="새회사", title="E", src="jumpit", url="u")
     text = io_acts.fetch_requirements(t)
     assert text.startswith("필수: 가")
     assert len(text) <= io_acts.REQ_CAP
-    assert "줄3" not in text  # responsibility는 첫 2줄만 (캡 안에 들어올 때)
+    assert "줄2" in text and "줄3" not in text  # responsibility는 첫 2줄만
+    assert text.endswith("[우대사항] Django 경험")  # 우대는 필수 뒤에 라벨 붙여 — 제외 판단 참고용
+    monkeypatch.setattr(io_acts, "_get", lambda url: {
+        "result": {"qualifications": "가" * 3000, "responsibility": "", "preferredRequirements": "우대"}})
+    assert len(io_acts.fetch_requirements(t)) == io_acts.REQ_CAP  # 캡은 필수 원문을 먼저 지킨다
 
 
 def test_to_row_format():
