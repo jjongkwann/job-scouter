@@ -13,3 +13,4 @@ web/.next/
 web/next-env.d.ts
 deploy/deploy-mini.log
 deploy/.deploy-mini.lock/
+deploy/.deployed-rev

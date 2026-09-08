@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# 미니(mini:~/apps/job-scouter)에 배포한다. origin/main을 pull하고, 리비전이
-# 바뀌었을 때만 io·llm·api·web을 재빌드한다(temporal은 건드리지 않는다 —
-# 워크플로 이력이 SQLite에 있다). 로그는 deploy/deploy-mini.log 하나에 쌓인다.
+# 미니(mini:~/apps/job-scouter)에 배포한다. origin/main을 pull하고, HEAD가 마지막으로
+# 빌드한 리비전(deploy/.deployed-rev)과 다를 때만 io·llm·api·web을 재빌드한다(temporal은
+# 건드리지 않는다 — 워크플로 이력이 SQLite에 있다). pull 전후 비교로 판단하지 않는 이유:
+# 미니의 clone은 작업 머신과 .git째 동기화돼 있어 커밋이 push 전에 이미 도착한다 —
+# pull은 늘 "Already up to date"라 그 방식으로는 재빌드가 영영 안 걸렸다(2026-09-08 실측).
+# 로그는 deploy/deploy-mini.log 하나에 쌓인다.
 #
 #   scripts/deploy-mini.sh            # 변경이 있을 때만 재빌드
 #   scripts/deploy-mini.sh --force    # 변경이 없어도 재빌드
@@ -38,18 +41,19 @@ set -euo pipefail
 export PATH=/usr/local/bin:/opt/homebrew/bin:$PATH
 cd "$REMOTE_DIR"
 
-before=$(git rev-parse HEAD)
 git pull --ff-only origin main
-after=$(git rev-parse HEAD)
+head=$(git rev-parse HEAD)
+deployed=$(cat deploy/.deployed-rev 2>/dev/null || echo none)
 
-if [ "$before" = "$after" ] && [ -z "$FORCE" ]; then
-  echo "변경 없음 ($(git rev-parse --short HEAD)) — 재빌드 생략"
+if [ "$head" = "$deployed" ] && [ -z "$FORCE" ]; then
+  echo "변경 없음 (${head:0:7} 빌드됨) — 재빌드 생략"
   exit 0
 fi
 
-echo "리비전 ${before:0:7} → ${after:0:7}"
+echo "리비전 ${deployed:0:7} → ${head:0:7}"
 docker-compose -f deploy/compose.yaml up -d --build io llm api web
 docker-compose -f deploy/compose.yaml ps
+echo "$head" > deploy/.deployed-rev
 REMOTE
 } >>"$LOG" 2>&1 || rc=$?
 
