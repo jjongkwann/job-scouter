@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query'
 
 import { ApiError, get, type Candidate, type Candidates } from '@/lib/api'
 import { ALL, applyFilters, isDead, scoreCells, sortRows, type Filters, type SortKey } from '@/lib/candidates'
+import { jobplanetUrl } from '@/lib/utils'
 import { Page } from '@/components/page'
 import { Fit } from '@/components/fit'
 import { Due } from '@/components/due'
@@ -302,7 +303,13 @@ function Row({ c, app }: { c: Candidate; app?: { slug: string; n: number } }) {
             {c.title}
           </a>
         </div>
-        <div className="mt-px text-[12px] text-[var(--dim)]">{c.company}</div>
+        <div className="mt-px text-[12px] text-[var(--dim)]">
+          {c.company}
+          {' · '}
+          <a href={jobplanetUrl(c.company)} target="_blank" rel="noopener" className="text-[var(--faint)] no-underline hover:underline hover:underline-offset-2">
+            잡플래닛
+          </a>
+        </div>
       </div>
 
       <div className={`text-[15px] leading-[1.1] font-extrabold tabular ${REC_CLS(c.rec)}`}>

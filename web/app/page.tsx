@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
 import { ApiError, get, post, type Dashboard, type Proposal } from '@/lib/api'
+import { jobplanetUrl } from '@/lib/utils'
 import { Page } from '@/components/page'
 import { Fit } from '@/components/fit'
 import { Due } from '@/components/due'
@@ -261,6 +262,10 @@ function Row({
         </div>
         <div className="mt-px text-[12px] text-[var(--dim)]">
           {p.company}
+          {' · '}
+          <a href={jobplanetUrl(p.company)} target="_blank" rel="noopener" className="text-[var(--faint)] no-underline hover:underline hover:underline-offset-2">
+            잡플래닛
+          </a>
           {p.due && (
             <>
               {' · '}
