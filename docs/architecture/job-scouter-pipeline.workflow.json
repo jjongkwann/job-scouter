@@ -1,0 +1,283 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "공고 한 건의 여정",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "unattended",
+        "label": "무인 수집·판정",
+        "focus": [
+          "fetch",
+          "context",
+          "judge",
+          "excluded",
+          "save"
+        ],
+        "note": "매일 09:07 시작. io가 모으고 llm이 공고당 1회 채점한다. 제외 판정도 저장해 다음 스캔에서 다시 판정하지 않는다."
+      },
+      {
+        "id": "review",
+        "label": "사람 O/X",
+        "focus": [
+          "save",
+          "review",
+          "rejected",
+          "publish"
+        ],
+        "note": "대시보드에는 exclude가 아닌 것만 총점순으로 뜬다. O는 등재, X는 사유와 함께 skipped로 남는다."
+      },
+      {
+        "id": "drafts",
+        "label": "지원서류 초안",
+        "focus": [
+          "publish",
+          "drafts"
+        ],
+        "note": "Publish가 끝나면 Drafts가 승인건마다 Draft 자식을 순차 실행한다. 한 건 실패해도 나머지는 계속, 실패가 있으면 FAILED로 드러난다."
+      }
+    ],
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "lanes": [
+    {
+      "id": "io",
+      "label": "io 워커 · 자격증명 없음"
+    },
+    {
+      "id": "human",
+      "label": "사람 · 대시보드 :8090"
+    },
+    {
+      "id": "llm",
+      "label": "llm 워커 · claude -p"
+    },
+    {
+      "id": "exceptions",
+      "label": "걸러지는 곳",
+      "variant": "exception"
+    }
+  ],
+  "phases": [
+    {
+      "id": "listup",
+      "label": "리스트업",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "judging",
+      "label": "판정",
+      "fromCol": 2,
+      "toCol": 3,
+      "variant": "emphasis"
+    },
+    {
+      "id": "decide",
+      "label": "O/X",
+      "fromCol": 4,
+      "toCol": 4
+    },
+    {
+      "id": "draft",
+      "label": "초안",
+      "fromCol": 5,
+      "toCol": 5,
+      "variant": "dashed"
+    }
+  ],
+  "mainPath": [
+    "fetch",
+    "context",
+    "judge",
+    "save",
+    "review",
+    "publish",
+    "drafts"
+  ],
+  "nodes": [
+    {
+      "id": "fetch",
+      "lane": "io",
+      "col": 0,
+      "type": "backend",
+      "label": "수집 · 선정",
+      "sublabel": "매일 09:07 · 원티드·점핏",
+      "tag": "fetch_jobs · load_targets",
+      "width": 112
+    },
+    {
+      "id": "context",
+      "lane": "io",
+      "col": 1,
+      "type": "backend",
+      "label": "요건 · 검색",
+      "sublabel": "자격요건 2000자 + 우대",
+      "tag": "판례·평판·사실 (ES)",
+      "width": 112
+    },
+    {
+      "id": "judge",
+      "lane": "llm",
+      "col": 2,
+      "type": "security",
+      "label": "판정",
+      "sublabel": "루브릭 v2 + 사실베이스",
+      "tag": "공고당 1회 · 캐시",
+      "width": 112
+    },
+    {
+      "id": "save",
+      "lane": "io",
+      "col": 3,
+      "type": "database",
+      "label": "proposals.json",
+      "sublabel": "id 병합 · commit+push",
+      "tag": "save_proposals",
+      "width": 112
+    },
+    {
+      "id": "review",
+      "lane": "human",
+      "col": 4,
+      "type": "frontend",
+      "label": "대시보드 O/X",
+      "sublabel": "exclude 아닌 것만",
+      "tag": "총점순 · 사람이 결정",
+      "width": 112
+    },
+    {
+      "id": "publish",
+      "lane": "io",
+      "col": 5,
+      "type": "backend",
+      "label": "Publish",
+      "sublabel": "등재·거부·마감·보고서",
+      "tag": "commit_rows → report",
+      "width": 112
+    },
+    {
+      "id": "drafts",
+      "lane": "llm",
+      "col": 5,
+      "type": "backend",
+      "label": "Drafts",
+      "sublabel": "승인건마다 Draft 자식",
+      "tag": "순차 · 실패는 FAILED",
+      "width": 112
+    },
+    {
+      "id": "excluded",
+      "lane": "exceptions",
+      "col": 2,
+      "type": "security",
+      "label": "제외 (exclude)",
+      "sublabel": "스택 불일치 · 판단 불가",
+      "tag": "화면에 안 뜸 · 재판정 안 함",
+      "width": 112
+    },
+    {
+      "id": "rejected",
+      "lane": "exceptions",
+      "col": 4,
+      "type": "external",
+      "label": "X 거부",
+      "sublabel": "사유와 함께 skipped",
+      "tag": "다음 수집에 기추적",
+      "width": 112
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-fetch",
+      "from": "fetch",
+      "to": "context",
+      "label": "미판정 · 마감 전만"
+    },
+    {
+      "id": "e-context",
+      "from": "context",
+      "to": "judge",
+      "label": "jobscout-llm 0.5/s",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e-judge",
+      "from": "judge",
+      "to": "save",
+      "label": "scores · exclude · reason",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "bottom"
+    },
+    {
+      "id": "e-save",
+      "from": "save",
+      "to": "review",
+      "label": "화면 표시",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e-approve",
+      "from": "review",
+      "to": "publish",
+      "label": "O",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e-drafts",
+      "from": "publish",
+      "to": "drafts",
+      "role": "async",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "e-exclude",
+      "from": "judge",
+      "to": "excluded",
+      "role": "error",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "e-reject",
+      "from": "review",
+      "to": "rejected",
+      "label": "X + 사유",
+      "role": "error",
+      "variant": "security"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "판정관이 보는 것",
+      "items": [
+        "루브릭 v2 + 사실베이스 전문 — 사이클 내 불변, 프롬프트 캐시",
+        "자격요건 2000자 + 우대 · 판례 8건 · 평판 · 사실 발췌"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "제외 규칙 v2 — 기준은 보유 스킬",
+      "items": [
+        "필수 주력 스택이 사실베이스에 없으면 exclude (8점 아님)",
+        "대조 불가면 '판단 불가' exclude · 제외 판정은 버전 무관 유지"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "돈과 안전장치",
+      "items": [
+        "judge 1회 0.5달러 · 스캔 200만 토큰, 초과분은 미점수 강등",
+        "Drafts는 Publish와 분리 — 대시보드 잠금이 길어지지 않음"
+      ]
+    }
+  ]
+}
