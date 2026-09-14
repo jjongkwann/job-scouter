@@ -120,6 +120,33 @@ def test_publish_starts_workflow(client, monkeypatch):
     assert got == {"ids": ["111"], "rejects": [{"id": "333", "why": "너무 멀다"}]}
 
 
+def test_publish_removes_selected_candidates_and_keeps_application_docs(client, repo, monkeypatch):
+    from jobscouter import io_acts
+
+    monkeypatch.setattr(io_acts, "JOBFEED", repo / "jobfeed")
+    monkeypatch.setattr(io_acts, "_commit_and_push", lambda *args: "커밋 생략")
+    path = repo / "jobfeed" / "candidates.json"
+    cand = json.loads(path.read_text())
+    row = cand["rows"][0]
+    cand["rows"].extend([[*row[:2], cid, *row[3:]] for cid in ("j555", 8888)])
+    path.write_text(json.dumps(cand))
+
+    async def idle():
+        return None
+
+    async def start(ids, rejects):
+        assert ids == []
+        assert io_acts.reject_proposals(rejects) == 2
+        return "publish-remove"
+
+    monkeypatch.setattr(api, "latest_publish", idle)
+    monkeypatch.setattr(api, "start_publish", start)
+    r = client.post("/api/publish", json={"rejects": [{"id": cid, "why": "후보목록에서 삭제"} for cid in ("222", "j555")]})
+    assert r.json() == {"workflow_id": "publish-remove"}
+    assert [c["id"] for c in client.get("/api/candidates").json()["rows"]] == ["8888"]
+    assert client.get("/api/applications/test_co").json()["docs"]["1_맞춤_이력서.md"] == "# 이력서\n\n내용"
+
+
 def test_publish_rejects_overlap_between_approve_and_reject(client):
     r = client.post("/api/publish", json={"ids": ["111"],
                                           "rejects": [{"id": "111", "why": "너무 멀다"}]})

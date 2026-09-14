@@ -157,6 +157,32 @@ def test_reject_proposals_records_skipped(tmp_path, monkeypatch):
     assert "777" not in props
 
 
+def test_reject_listed_candidates_preserves_other_rows_and_retry_metadata(tmp_path, monkeypatch):
+    _init_repo(tmp_path)
+    jobfeed = tmp_path / "jobfeed"
+    jobfeed.mkdir()
+    _touch_jobfeed(jobfeed, monkeypatch)
+    path = jobfeed / "candidates.json"
+    cand = json.loads(path.read_text())
+    target = cand["rows"][1]
+    target[7] = "closed"
+    second = [*target[:2], "j555", *target[3:]]
+    sibling = [*target[:2], 8888, *target[3:]]
+    cand["rows"].extend([second, sibling])
+    path.write_text(json.dumps(cand, ensure_ascii=False))
+    ids = ["222", "j555"]
+    remaining = [row for row in cand["rows"] if str(row[2]) not in ids]
+    props = (jobfeed / "proposals.json").read_text()
+
+    for _ in range(2):  # activity 재시도에서도 회사·제목을 잃지 않는다
+        assert io_acts.reject_proposals([{"id": cid, "why": "후보목록에서 삭제"} for cid in ids]) == 2
+        saved = json.loads(path.read_text())
+        assert saved["rows"] == remaining
+        assert saved["skipped"] == {**cand["skipped"], **{cid: [target[1], target[0], "후보목록에서 삭제"] for cid in ids}}
+        assert json.loads((jobfeed / "proposals.json").read_text()) == json.loads(props)
+        assert not set(ids) & {t.id for t in io_acts.load_targets()}
+
+
 def test_fetch_posting_full_wanted_and_jumpit(monkeypatch):
     """소스별 필드 매핑."""
     monkeypatch.setattr(io_acts, "_get", lambda url: {

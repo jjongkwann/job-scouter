@@ -1,9 +1,10 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 
-import { ApiError, get, type Candidate, type Candidates } from '@/lib/api'
+import { ApiError, get, post, type Candidate, type Candidates, type Dashboard } from '@/lib/api'
 import { ALL, applyFilters, isDead, scoreCells, sortRows, type Filters, type SortKey } from '@/lib/candidates'
 import { jobplanetUrl } from '@/lib/utils'
 import { Page } from '@/components/page'
@@ -11,7 +12,9 @@ import { Fit } from '@/components/fit'
 import { Due } from '@/components/due'
 import { ScoreCells } from '@/components/score-cells'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 
@@ -62,8 +65,10 @@ const LEGEND: [string, string][] = [
 ]
 
 export default function CandidatesPage() {
+  const qc = useQueryClient()
   const [f, setF] = useState<Filters>(ALL)
   const [sort, setSort] = useState<SortKey>('rec')
+  const [picked, setPicked] = useState<string[]>([])
 
   // 저장된 보기 상태는 마운트 뒤에 읽는다. useState 초기값으로 읽으면 프리렌더된 HTML(기본값)과
   // 어긋나 하이드레이션 오류가 난다 — 브라우저에만 있는 값을 되살리는 건 이 규칙의 정당한 예외다.
@@ -92,9 +97,34 @@ export default function CandidatesPage() {
     refetchInterval: 30_000,
   })
 
+  const { data: dashboard } = useQuery({
+    queryKey: ['dashboard'],
+    queryFn: () => get<Dashboard>('/dashboard'),
+    refetchInterval: 10_000,
+  })
+  const remove = useMutation({
+    mutationFn: (ids: string[]) =>
+      post<{ workflow_id: string }>('/publish', { ids: [], rejects: ids.map((id) => ({ id, why: '후보목록에서 삭제' })) }),
+    onSuccess: () => {
+      toast('후보 삭제 처리 시작')
+      setPicked([])
+      return qc.invalidateQueries()
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.detail : String(e)),
+  })
+  const busy = remove.isPending || dashboard?.publish?.status === 'RUNNING'
   const rows = useMemo(() => data?.rows ?? [], [data])
   const live = useMemo(() => applyFilters(sortRows(rows.filter((c) => !isDead(c)), sort), f, true), [rows, sort, f])
   const dead = useMemo(() => applyFilters(sortRows(rows.filter(isDead), sort), f, false), [rows, sort, f])
+  const selected = rows.filter((c) => picked.includes(c.id))
+  const selectCandidate = (id: string, checked: boolean) =>
+    setPicked((p) => checked ? [...p, id] : p.filter((x) => x !== id))
+  const removeSelected = () => {
+    const names = selected.map((c) => `${c.company} · ${c.title}`).join('\n')
+    if (window.confirm(`선택한 공고 ${selected.length}건을 후보목록에서 삭제할까요?\n\n${names}\n\n같은 공고는 다시 후보로 올리지 않으며, 기존 지원서류는 보존됩니다.`)) {
+      remove.mutate(selected.map((c) => c.id))
+    }
+  }
 
   // 통근 밴드 이름은 데이터 repo settings.json에서 온다 — 화면에 기준지를 박아 두지 않는다
   const zoneLabels = useMemo(() => {
@@ -185,6 +215,16 @@ export default function CandidatesPage() {
         ))}
       </div>
 
+      <div className="sticky top-3 z-10 mb-3 flex flex-wrap items-center gap-3 rounded-[9px] border border-[var(--line)] bg-[var(--row)] px-3.5 py-2.5 text-[12px]">
+        <span aria-live="polite">{selected.length}건 선택</span>
+        <Button variant="outline" size="sm" disabled={!selected.length || busy} onClick={() => setPicked([])}>
+          선택 해제
+        </Button>
+        <Button className="ml-auto" variant="destructive" size="sm" disabled={!selected.length || busy} onClick={removeSelected}>
+          {busy ? '처리 중…' : '선택한 공고 삭제'}
+        </Button>
+      </div>
+
       <div className="mb-3 overflow-hidden rounded-[9px] border border-[var(--line)] bg-[var(--row)]">
         <div
           className={`grid items-center gap-[10px] border-b border-[var(--line)] bg-[var(--bg)] px-[14px] py-[9px] text-[11px] text-[var(--dim)] max-[1060px]:hidden ${GRID}`}
@@ -219,7 +259,7 @@ export default function CandidatesPage() {
         ) : live.length === 0 ? (
           <div className="p-8 text-center text-[13px] text-[var(--dim)]">조건에 맞는 공고가 없습니다.</div>
         ) : (
-          live.map((c) => <Row key={c.id} c={c} app={data?.apps[c.id]} />)
+          live.map((c) => <Row key={c.id} c={c} app={data?.apps[c.id]} busy={busy} picked={picked.includes(c.id)} onSelect={selectCandidate} />)
         )}
       </div>
 
@@ -230,7 +270,7 @@ export default function CandidatesPage() {
           </summary>
           <div className="overflow-hidden rounded-[9px] border border-[var(--line)] bg-[var(--row)]">
             {dead.map((c) => (
-              <Row key={c.id} c={c} app={data?.apps[c.id]} />
+              <Row key={c.id} c={c} app={data?.apps[c.id]} busy={busy} picked={picked.includes(c.id)} onSelect={selectCandidate} />
             ))}
           </div>
         </details>
@@ -291,13 +331,26 @@ const REP_CLS: Record<string, string> = {
   none: '',
 }
 
-function Row({ c, app }: { c: Candidate; app?: { slug: string; n: number } }) {
+function Row({ c, app, busy, picked, onSelect }: {
+  c: Candidate
+  app?: { slug: string; n: number }
+  busy: boolean
+  picked: boolean
+  onSelect: (id: string, checked: boolean) => void
+}) {
   const dead = isDead(c)
   return (
     <div
       className={`grid items-center gap-[10px] border-b border-[var(--line)] bg-[var(--row)] px-[14px] py-[9px] last:border-b-0 hover:bg-[var(--hov)] rail ${RAIL[c.rep_key]} ${GRID} max-[1060px]:py-[13px] ${dead ? 'opacity-55' : ''}`}
     >
-      <div>
+      <div className="relative pl-8">
+        <Checkbox
+          className="absolute top-0.5 left-0"
+          checked={picked}
+          disabled={busy}
+          aria-label={`${c.company} ${c.title} 선택`}
+          onCheckedChange={(checked) => onSelect(c.id, checked)}
+        />
         <div className="text-[14px] leading-[1.35] font-semibold tracking-[-0.1px]">
           <a href={c.url} target="_blank" rel="noopener" className="text-inherit no-underline hover:underline hover:underline-offset-2">
             {c.title}

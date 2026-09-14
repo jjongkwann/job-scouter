@@ -312,17 +312,21 @@ def listed_target(cid: str) -> dict:
 
 @activity.defn
 def reject_proposals(rejects: list[dict]) -> int:
-    """candidates.json skipped[id] = [company, title, why] 기록 + proposals에서 제거."""
+    """skipped[id] = [company, title, why] 기록 + proposals와 등재된 rows에서 제거."""
     if not rejects:
         return 0
     path = JOBFEED / PROPOSALS
     props = json.loads(path.read_text()) if path.exists() else {}
     cand_path = JOBFEED / "candidates.json"
     cand = json.loads(cand_path.read_text())
+    listed = {str(row[2]): [row[1], row[0]] for row in cand["rows"]}
     for r in rejects:
         pid = str(r["id"])
         rec = props.pop(pid, {})
-        cand["skipped"][pid] = [rec.get("company", ""), rec.get("title", ""), r["why"]]
+        names = listed.get(pid) or cand["skipped"].get(pid, [])[:2] or [rec.get("company", ""), rec.get("title", "")]
+        cand["skipped"][pid] = [*names, r["why"]]
+    rejected = {str(r["id"]) for r in rejects}
+    cand["rows"] = [row for row in cand["rows"] if str(row[2]) not in rejected]
     cand_path.write_text(json.dumps(cand, ensure_ascii=False, indent=1))
     path.write_text(json.dumps(props, ensure_ascii=False, indent=1))
     _commit_and_push(["jobfeed/candidates.json", f"jobfeed/{PROPOSALS}"],
