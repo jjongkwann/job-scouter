@@ -41,11 +41,11 @@ flowchart LR
   class W,API ui
 ```
 
-회색 = `jobscout-io` 큐(자격증명 없음) · 노랑 = `jobscout-llm` 큐(`claude -p`) ·
+회색 = `jobscout-io` 큐(자격증명 없음) · 노랑 = `jobscout-llm` 큐(`codex exec`) ·
 파랑 = 화면(`web`은 브라우저만, `api`는 컨테이너 안에서만 열린다).
 
 - `judge`는 공고당 activity 1개. JSON 스키마를 강제하고 usage를 기록한다.
-  캐시키는 `(공고id, 루브릭버전, 사실베이스 해시)`, 예산을 넘기면 미점수로 강등한다.
+  캐시키는 `(공고id, 루브릭버전, 사실베이스 해시, 모델, 추론 강도)`, 예산을 넘기면 미점수로 강등한다.
 - 추천도·통근·순위·마감·`candidates.json` 검증은 `jobscouter/candidates.py` 한 곳에서만 계산한다.
 - `Publish`는 등재·거부·보고서까지만 하고 끝난다 — 완료 후 `Drafts`가 승인건 초안을
   순차로 만들고(한 건 실패해도 나머지는 계속), 실패가 있으면 FAILED로 끝나 화면에 드러난다.
@@ -58,11 +58,17 @@ flowchart LR
 
 데이터 repo에는 md·json과 `settings.json`만 둔다 — 코드도 HTML도 이 저장소에 있다.
 
-큐 4개는 자격증명 격리 경계다. judge·report·초안·이력서 채팅은 Claude Code
-headless(`claude -p`, 구독 인증 — 로그인된 CLI 또는 `CLAUDE_CODE_OAUTH_TOKEN`)로 돌고,
-이 실행 경계는 llm 워커의 `judge.py`에만 있다 — io·workflow·api 모듈은 judge를
-import하지 않는다(테스트로 강제). API 키 불필요. 호출당 지출 상한은
-`JudgeInput.max_usd`(`ScanParams.max_usd`, `--budget`).
+큐 4개는 자격증명 격리 경계다. 판정·보고서·지원서류 초안·이력서 갱신 제안·채팅은
+Codex CLI(`codex exec`)의 `gpt-6-astra`·`xhigh`로 생성한다.
+llm 워커만 로그인된 Codex 인증을 사용하고, io·workflow·api는 실행 경계인
+`judge.py`를 import하지 않는다(테스트로 강제). 사용자 설정·MCP·외부 도구는 비활성화한다.
+
+`scan --budget`은 입력+출력 토큰 예산이며 청크 사이에 검사한다. 호출별 시간 제한,
+Temporal 재시도 제한과 큐 레이트리밋도 유지한다. Codex CLI는 달러 상한과 실청구액을
+제공하지 않으므로 신규 사용량의 `usd`는 `null`이다. `max_usd` 필드는 기존 Temporal
+입력 재생을 위해 남겨 두며 생성에는 사용하지 않는다. 기존 판정·초안·사용량 기록은 보존하고,
+새 모델의 판정 캐시를 분리한다. 기존 후보나 초안을 일괄 재생성하지 않는다.
+
 
 `jobscout-llm`에는 큐 레벨 레이트리밋(0.5/s)이 걸려 있다. 이력서 채팅은 사람이 화면
 앞에서 기다리는 대화라 판정 뒤에 줄 서면 안 되므로 `jobscout-chat` 큐를 따로 쓴다 —
@@ -125,7 +131,7 @@ io 워커는 `.env`에 `JOBSCOUTER_JOBFEED`가 있어야 뜬다(없으면 거부
 
 ```bash
 uv run python -m jobscouter.worker io    # 터미널 1 — workflow+io (자격증명 없음)
-uv run python -m jobscouter.worker llm   # 터미널 2 — judge·report (claude -p)
+uv run python -m jobscouter.worker llm   # 터미널 2 — judge·report (codex exec)
 
 uv run python -m jobscouter.worker scan [--budget 2000000]   # DailyScan 시작(수동)
 uv run python -m jobscouter.worker publish id1 id2 ...       # Publish 시작 — 등재 승인

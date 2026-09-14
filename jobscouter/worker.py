@@ -1,7 +1,7 @@
 """실행 진입점.
 
     uv run python -m jobscouter.worker io                  # workflow+io 워커 (자격증명 없음)
-    uv run python -m jobscouter.worker llm                  # judge·report (claude -p, 구독 인증)
+    uv run python -m jobscouter.worker llm                  # judge·report (codex exec, 구독 인증)
     uv run python -m jobscouter.worker scan [--budget N]     # DailyScan 시작
     uv run python -m jobscouter.worker publish id1 id2 ...   # Publish 시작 (등재 승인)
     uv run python -m jobscouter.worker reject <id> "<사유>"  # Publish 시작 (거부만)
@@ -133,8 +133,8 @@ async def main() -> None:
     elif cmd == "llm":
         import shutil
         from jobscouter import judge as judge_mod
-        if not shutil.which(judge_mod.CLAUDE):
-            sys.exit(f"'{judge_mod.CLAUDE}' 없음 — Claude Code 설치·로그인(또는 CLAUDE_CODE_OAUTH_TOKEN) 필요")
+        if not shutil.which(judge_mod.CODEX):
+            sys.exit(f"'{judge_mod.CODEX}' 없음 — Codex CLI 설치·로그인(codex login) 필요")
         from jobscouter.config import Q_CHAT, Q_LLM
         workers = [
             Worker(client, task_queue=Q_LLM,
@@ -146,7 +146,8 @@ async def main() -> None:
             Worker(client, task_queue=Q_CHAT, activities=[judge_mod.resume_chat],
                    activity_executor=ThreadPoolExecutor(2)),
         ]
-        print(f"llm 워커 시작 — {TEMPORAL} / {Q_LLM}, {Q_CHAT}")
+        print(f"llm 워커 시작 — {TEMPORAL} / {Q_LLM}, {Q_CHAT} / "
+              f"{judge_mod.JUDGE_MODEL} / {judge_mod.REASONING_EFFORT}")
         await asyncio.gather(*(w.run() for w in workers))
 
     elif cmd == "schedule":

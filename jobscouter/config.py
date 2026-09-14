@@ -19,7 +19,8 @@ PROMPTS = Path(_env("JOBSCOUTER_PROMPTS", str(ROOT / "prompts")))
 DATA = ROOT / "data"
 Q_WF, Q_IO, Q_LLM = "jobscout-wf", "jobscout-io", "jobscout-llm"
 Q_CHAT = "jobscout-chat"                       # 판정 레이트리밋과 분리 — 채팅이 판정 뒤에 안 밀리게
-JUDGE_MODEL = _env("JOBSCOUTER_MODEL", "claude-sonnet-5")
+JUDGE_MODEL = _env("JOBSCOUTER_MODEL", "gpt-6-astra")
+REASONING_EFFORT = _env("JOBSCOUTER_REASONING_EFFORT", "xhigh")
 # 루브릭 버전 — judge(캐시 키·판정 기록)와 load_targets(현 버전 판정 완료 건 제외)가 공유.
 # 올리면 옛 버전의 pending 판정은 재판정 대상이 된다. exclude 판정은 버전과 무관하게 유지한다 —
 # 제외는 늘리는 방향으로만 바뀌어 왔고, 제외건 재판정은 LLM 지출만 낸다
@@ -121,7 +122,7 @@ def job_reference(cid: str) -> dict[str, str]:
 class ScanParams:
     budget_tokens: int = 2_000_000   # 초과 시 잔여는 미점수 강등
     chunk: int = 8                   # 동시 judge 수 — 청크 사이에서 예산 체크
-    max_usd: float = 0.5             # judge 1회 지출 상한 (--max-budget-usd) — 루브릭+사실베이스 ~25k 토큰이라 첫 호출 ~$0.1
+    max_usd: float = 0.5             # 기존 Temporal 입력 재생용 필드. Codex는 사용하지 않는다(USD 상한 미지원).
 
 
 @dataclass
@@ -144,7 +145,7 @@ class JudgeInput:
     target: Target
     requirements: str
     search_context: str = ""   # Phase 3: 판례·평판·사실 발췌
-    max_usd: float = 0.5       # 폭주 방지 — 타입으로 강제
+    max_usd: float = 0.5       # 기존 Temporal 입력 재생용 필드. Codex는 사용하지 않는다.
 
 
 @dataclass

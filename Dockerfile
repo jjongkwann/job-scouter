@@ -1,5 +1,5 @@
-# io·llm 워커 공용 이미지. judge/report(llm)는 컨테이너 안에서 `claude -p`를 실행하므로
-# Node.js(Claude Code CLI)와 uv(파이썬)가 둘 다 필요하다.
+# io·llm 워커 공용 이미지. judge/report(llm)는 컨테이너 안에서 `codex exec`를 실행하므로
+# Node.js(Codex CLI)와 uv(파이썬)가 둘 다 필요하다.
 FROM python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g @anthropic-ai/claude-code
+RUN npm install -g @openai/codex@0.154.0
 RUN pip install --no-cache-dir uv
 
 # 호스트의 ~/.git-credentials(ro 마운트)로 candidates.json push 인증

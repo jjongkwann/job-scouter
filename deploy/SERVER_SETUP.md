@@ -35,10 +35,12 @@ chmod 600 ~/.git-credentials
 
 ## 2. 인증·환경변수
 
-llm 컨테이너의 `claude -p`는 **서버 호스트의 Claude Code 로그인**을 그대로 쓴다 —
-compose가 `~/.claude/.credentials.json`을 마운트한다(호스트에서 `claude`를 한 번
-로그인해 두면 끝). 호스트에 로그인이 없으면 작업 머신에서 `claude setup-token`으로
-토큰을 발급해 `deploy/.env`의 `CLAUDE_CODE_OAUTH_TOKEN`에 넣는다(마운트보다 우선).
+llm 컨테이너의 `codex exec`는 서버 호스트의 Codex 로그인을 공유한다.
+호스트에서 `codex login` 후 `codex login status`로 확인한다. compose는
+`~/.codex` 디렉터리를 llm 컨테이너에만 마운트한다. 이미지의 CLI 버전은 0.154.0으로 고정했다.
+기본 모델은 `gpt-6-astra`, 추론 강도는 `xhigh`이며 아래 환경변수로 명시한다.
+사용자 설정은 호출 시 무시하므로 호스트의 기본 모델이나 MCP 설정은 적용되지 않는다.
+
 
 ```bash
 cp deploy/server.env.example deploy/.env

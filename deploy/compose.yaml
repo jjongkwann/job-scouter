@@ -1,6 +1,6 @@
 # 서버 상시 가동 서비스. temporal은 워크플로 서버, io/llm은 워커,
 # api는 JSON API(:8091, LAN 비공개), web은 브라우저가 보는 Next.js(:8090).
-# 변수(DATA_REPO·CLAUDE_CODE_OAUTH_TOKEN·GIT_AUTHOR_*)는 deploy/.env — server.env.example 참조.
+# 변수(DATA_REPO·JOBSCOUTER_MODEL·JOBSCOUTER_REASONING_EFFORT·GIT_AUTHOR_*)는 deploy/.env — server.env.example 참조.
 name: jobscouter
 
 services:
@@ -52,10 +52,8 @@ services:
     volumes:
       - ${DATA_REPO}:/work/repo
       - jobscouter-data:/app/data
-      # 호스트 Claude Code 로그인 공유 — 디렉터리째 마운트. 파일 하나만 마운트하면 호스트가 토큰을
-      # 갱신(원자적 교체)할 때 inode가 바뀌어 컨테이너 쪽이 깨진다(2026-08-26 실측: Not logged in).
-      # 없으면 CLAUDE_CODE_OAUTH_TOKEN(.env)로 대체.
-      - ${HOME}/.claude:/root/.claude
+      # 토큰 갱신의 원자적 파일 교체를 따라가도록 Codex 인증 디렉터리를 마운트.
+      - ${HOME}/.codex:/root/.codex
     extra_hosts:
       - host.docker.internal:host-gateway
     restart: always

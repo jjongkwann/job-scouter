@@ -1,36 +1,40 @@
-"""llm 큐 activity — Claude Code headless(`claude -p`)로 판정한다.
+"""llm 큐 activity — Codex CLI(`codex exec`)로 판정한다.
 
-구독 인증(로그인된 CLI 또는 CLAUDE_CODE_OAUTH_TOKEN)은 이 모듈을 로드하는 llm 워커
+구독 인증(로그인된 Codex CLI)은 이 모듈을 로드하는 llm 워커
 프로세스에만 있다. io·workflow 모듈은 이 모듈을 import하지 않는다(테스트로 강제)."""
 import hashlib
 import json
 import os
+import signal
 import subprocess
 import tempfile
 import time
 from datetime import date
+from pathlib import Path
 
 from temporalio import activity
 
 from jobscouter.config import (APP_FILES, APP_EXAMPLE, APPLICATIONS, DATA, FACTBASE, RESUME,
-                               JOBFEED, JUDGE_MODEL, PROMPTS, RUBRIC_VERSION, JudgeInput,
+                               JOBFEED, JUDGE_MODEL, REASONING_EFFORT, PROMPTS, RUBRIC_VERSION, JudgeInput,
                                Judgment)
 
 
-EFFORT = "medium"
-CLAUDE = os.environ.get("JOBSCOUTER_CLAUDE", "claude")
+CODEX = os.environ.get("JOBSCOUTER_CODEX", "codex")
 _CAPS = [35, 25, 20, 20]
 _CACHE = DATA / "judgments.jsonl"
-# 린 모드 — 사용자 설정·MCP·도구를 전부 빼야 호출당 ~1k 토큰. 기본 모드는 MCP 도구
-# 스키마만 수십만 토큰을 실어 보낸다(실측 245k). --bare는 구독 로그인을 안 읽어 못 쓴다.
-_LEAN = ["--output-format", "json", "--tools", "", "--no-session-persistence",
-         "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
-         "--setting-sources", ""]
+# 생성 전용 실행: 호스트 설정·프로젝트 지침·외부 도구를 읽지 않는다.
+_LEAN = ["--ignore-user-config", "--ignore-rules", "--ephemeral",
+         "--skip-git-repo-check", "--sandbox", "read-only", "--json"]
+_CONFIG = {
+    "project_doc_max_bytes": 0,
+    "web_search": "disabled",
+    **{f"features.{name}": False for name in (
+        "shell_tool", "apps", "plugins", "multi_agent", "code_mode",
+        "code_mode_host", "browser_use", "computer_use", "image_generation", "view_image")},
+}
 
-# 긴 자유 텍스트(reason)는 맨 끝 — 모델이 긴 문자열 뒤에 XML 파라미터 문법을 섞어 넣으면
-# 뒤따르는 필드가 reason 안으로 삼켜져 스키마 검증이 계속 실패한다(2026-08-25 실측, 5/15건).
 SCORE_SCHEMA = {
-    "type": "object",
+    "type": "object", "additionalProperties": False,
     "properties": {
         "scores": {"type": "array", "items": {"type": "integer"},
                    "minItems": 5, "maxItems": 5,
@@ -45,14 +49,13 @@ SCORE_SCHEMA = {
     "required": ["scores", "exclude", "confidence", "quotes", "reason"],
 }
 
-# evidence(근거 발췌)가 가장 긴 자유 텍스트라 SCORE_SCHEMA와 같은 이유로 맨 끝에 둔다.
 RESUME_SCHEMA = {
-    "type": "object",
+    "type": "object", "additionalProperties": False,
     "properties": {
         "proposals": {
             "type": "array",
             "items": {
-                "type": "object",
+                "type": "object", "additionalProperties": False,
                 "properties": {
                     "target": {"type": "string", "enum": ["factbase", "이력서.md"]},
                     "section": {"type": "string", "description": "대상 문서 내 절 제목"},
@@ -70,14 +73,13 @@ RESUME_SCHEMA = {
     "required": ["proposals"],
 }
 
-# reply(사용자에게 보일 자유 텍스트)가 가장 긴 필드라 SCORE_SCHEMA와 같은 이유로 맨 끝에 둔다.
 CHAT_SCHEMA = {
-    "type": "object",
+    "type": "object", "additionalProperties": False,
     "properties": {
         "edits": {
             "type": "array",
             "items": {
-                "type": "object",
+                "type": "object", "additionalProperties": False,
                 "properties": {
                     "current": {"type": "string",
                                 "description": "고칠 원문을 문서에서 그대로 인용. 문서에 정확히 한 번만 나오는 만큼 길게"},
@@ -98,7 +100,7 @@ def factbase_hash() -> str:
 
 
 def _cache_key(inp: JudgeInput, fb_hash: str) -> str:
-    return f"{inp.target.id}|{RUBRIC_VERSION}|{fb_hash}"
+    return f"{inp.target.id}|{RUBRIC_VERSION}|{fb_hash}|{JUDGE_MODEL}|{REASONING_EFFORT}"
 
 
 def _load_cache() -> dict[str, dict]:
@@ -118,32 +120,57 @@ def _validate(s: list[int]) -> list[int]:
     return s
 
 
-def _claude(prompt: str, system: str, max_usd: float,
-            schema: dict | None = None, timeout: int = 240) -> dict:
-    """claude -p 1회. 결과 JSON(structured_output·result·usage·total_cost_usd)을 돌려준다.
-
-    프롬프트는 argv로 넘기지 않는다 — 리눅스는 인수 하나가 128KB를 넘으면 실행 자체가
-    실패한다(E2BIG, 실측: 초안 시스템 프롬프트 = 사실베이스+이력서.md ≈ 110KB). 시스템 프롬프트는
-    파일, 사용자 프롬프트는 stdin."""
-    cmd = [CLAUDE, "-p", "--model", JUDGE_MODEL,
-           "--effort", EFFORT, "--max-budget-usd", str(max_usd), *_LEAN]
-    if schema:
-        cmd += ["--json-schema", json.dumps(schema, ensure_ascii=False)]
+def _codex(prompt: str, system: str, schema: dict | None = None,
+           timeout: int = 240) -> dict:
+    """Codex 1회. 큰 시스템 프롬프트는 파일, 사용자 프롬프트는 stdin으로 전달한다."""
     DATA.mkdir(exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", suffix=".md", dir=DATA, delete=False) as f:
-        f.write(system)
-    try:
-        r = subprocess.run(cmd + ["--system-prompt-file", f.name], input=prompt,
-                           capture_output=True, text=True, timeout=timeout, cwd=DATA)
-    finally:
-        os.unlink(f.name)
-    try:
-        d = json.loads(r.stdout)
-    except ValueError:
-        raise RuntimeError(f"claude -p exit {r.returncode}: {(r.stderr or r.stdout)[-300:]}")
-    if r.returncode != 0 or d.get("is_error"):
-        raise RuntimeError(f"claude -p 실패 {d.get('subtype')}: {str(d.get('result'))[:300]}")
-    return d
+    started = time.monotonic()
+    with tempfile.TemporaryDirectory(prefix="codex-", dir=DATA) as tmp:
+        folder = Path(tmp).resolve()
+        instructions, output = folder / "instructions.md", folder / "output.txt"
+        instructions.write_text(system)
+        config = {**_CONFIG, "model_reasoning_effort": REASONING_EFFORT,
+                  "model_instructions_file": str(instructions)}
+        cmd = [CODEX, "exec", "--model", JUDGE_MODEL, *_LEAN]
+        for key, value in config.items():
+            cmd += ["--config", f"{key}={json.dumps(value)}"]
+        if schema is not None:
+            schema_path = folder / "schema.json"
+            schema_path.write_text(json.dumps(schema, ensure_ascii=False))
+            cmd += ["--output-schema", str(schema_path)]
+        cmd += ["--output-last-message", str(output), "-"]
+        with subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, text=True, cwd=folder,
+                              start_new_session=True) as proc:
+            try:
+                stdout, stderr = proc.communicate(prompt, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                # npm 런처뿐 아니라 자식 Codex 프로세스도 종료해 백그라운드 생성을 막는다.
+                os.killpg(proc.pid, signal.SIGKILL)
+                proc.communicate()
+                raise
+        if proc.returncode:
+            raise RuntimeError(f"codex exec exit {proc.returncode}: {(stderr or stdout)[-300:]}")
+        events = [json.loads(line) for line in stdout.splitlines() if line.strip()]
+        if any(e["type"] in ("turn.failed", "error") for e in events):
+            raise RuntimeError("codex exec 실패: " + str(events[-1])[:300])
+        turns = [e["usage"] for e in events if e["type"] == "turn.completed"]
+        if not turns or not output.exists() or not output.read_text().strip():
+            raise RuntimeError("codex exec 완료 응답 또는 사용량 누락")
+        usage = {}
+        for key in ("input_tokens", "output_tokens", "cached_input_tokens"):
+            values = [u.get(key) for u in turns]
+            if any(type(v) is not int or v < 0 for v in values):
+                raise RuntimeError(f"codex exec 사용량 오류: {key}")
+            usage[key] = sum(values)
+        result = output.read_text()
+        d = {"result": result, "usage": usage}
+        if schema is not None:
+            d["structured_output"] = json.loads(result)
+        print(json.dumps({"event": "codex.completed", "model": JUDGE_MODEL,
+                          "reasoning_effort": REASONING_EFFORT, "usage": usage,
+                          "ms": int((time.monotonic() - started) * 1000)}), flush=True)
+        return d
 
 
 @activity.defn
@@ -163,7 +190,7 @@ def judge(inp: JudgeInput) -> Judgment:
         user += f"\n\n<검색 컨텍스트>\n{inp.search_context}\n</검색 컨텍스트>"
 
     t0 = time.monotonic()
-    d = _claude(user, system, inp.max_usd, SCORE_SCHEMA)
+    d = _codex(user, system, SCORE_SCHEMA)
     out = d["structured_output"]
     scores = _validate([int(x) for x in out["scores"]])
     u = d.get("usage") or {}
@@ -173,10 +200,10 @@ def judge(inp: JudgeInput) -> Judgment:
         scores=scores, total=sum(scores), exclude=bool(out["exclude"]),
         reason=out["reason"].split("</")[0].strip(), quotes=list(out["quotes"]),
         confidence=float(out["confidence"]), rubric_version=RUBRIC_VERSION,
-        usage={"in": u.get("input_tokens", 0) + u.get("cache_creation_input_tokens", 0),
-               "out": u.get("output_tokens", 0),
-               "cache_read": u.get("cache_read_input_tokens", 0),
-               "usd": d.get("total_cost_usd", 0), "model": JUDGE_MODEL,
+        usage={"in": u["input_tokens"],
+               "out": u["output_tokens"],
+               "cache_read": u["cached_input_tokens"],
+               "usd": None, "model": JUDGE_MODEL, "reasoning_effort": REASONING_EFFORT,
                "ms": int((time.monotonic() - t0) * 1000)})
     rec = {"key": key, "judgment": {k: v for k, v in j.__dict__.items()
                                     if k != "cached"}}
@@ -226,7 +253,7 @@ def draft_application(target: dict, posting: str) -> dict[str, str]:
         "- 형식 예시 문서의 회사 고유 내용(회사명·프로젝트명·수치·사례)은 절대 옮기지 말고 "
         "섹션·표 구조만 따를 것."
     )
-    d = _claude(prompt, system, max_usd=1.0, timeout=600)
+    d = _codex(prompt, system, timeout=600)
     files: dict[str, str] = {}
     for chunk in d["result"].split("=== FILE: ")[1:]:
         name, _, body = chunk.partition(" ===")
@@ -253,7 +280,7 @@ def propose_resume_update(snapshot_text: str) -> list[dict]:
     prompt = (f"<PKB 발췌>\n{snapshot_text}\n</PKB 발췌>\n\n"
               "위 PKB 발췌를 기준으로 사실베이스·이력서.md 갱신 제안 목록을 만들어라. "
               "반영할 변경이 없으면 빈 목록을 반환하라.")
-    d = _claude(prompt, system, max_usd=1.0, schema=RESUME_SCHEMA)
+    d = _codex(prompt, system, schema=RESUME_SCHEMA)
     return list(d["structured_output"]["proposals"])
 
 
@@ -273,7 +300,7 @@ def resume_chat(doc: str, turns: list[dict], message: str) -> dict:
         f"[사용자] {t['text']}" if t["role"] == "user" else f"[조수] {t['text']}"
         for t in turns)
     prompt = (f"<현재 문서>\n{doc}\n</현재 문서>\n\n<대화>\n{convo}\n</대화>\n\n{message}")
-    d = _claude(prompt, system, max_usd=0.5, schema=CHAT_SCHEMA, timeout=300)
+    d = _codex(prompt, system, schema=CHAT_SCHEMA, timeout=300)
     out = d["structured_output"]
     return {"reply": out["reply"], "edits": list(out["edits"])}
 
@@ -281,11 +308,11 @@ def resume_chat(doc: str, turns: list[dict], message: str) -> dict:
 @activity.defn
 def report(stats: dict) -> str:
     """사이클 요약 md — 서술은 LLM, 수치는 stats 그대로."""
-    d = _claude(
+    d = _codex(
         "다음 job-scouter 사이클 통계로 간결한 운영 보고서 md를 써라. "
         "섹션: 요약(2문장) / 등재·제외 / 강등·실패 / 비용·latency. "
         "수치를 지어내지 말 것:\n" + json.dumps(stats, ensure_ascii=False),
-        "너는 운영 보고서 작성기다. 마크다운 본문만 출력한다.", max_usd=0.2)
+        "너는 운영 보고서 작성기다. 마크다운 본문만 출력한다.")
     path = JOBFEED / "reports" / f"{date.today()}_자동사이클.md"
     path.write_text(f"# {date.today()} 자동 사이클\n\n{d['result']}\n")
     return str(path)
