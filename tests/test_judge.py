@@ -94,7 +94,7 @@ def test_draft_application_splits_5_files_and_passes_judgment(tmp_path, monkeypa
 
     def fake_codex(prompt, system, schema=None, timeout=240):
         called.append(prompt)
-        assert timeout == 600
+        assert timeout == 1200
         assert "사실" in system and "예시 0_JD.md" in system and "지원서류 규칙" in system
         return {"result": out_text}
 

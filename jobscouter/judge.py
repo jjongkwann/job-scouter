@@ -253,7 +253,7 @@ def draft_application(target: dict, posting: str) -> dict[str, str]:
         "- 형식 예시 문서의 회사 고유 내용(회사명·프로젝트명·수치·사례)은 절대 옮기지 말고 "
         "섹션·표 구조만 따를 것."
     )
-    d = _codex(prompt, system, timeout=600)
+    d = _codex(prompt, system, timeout=1200)
     files: dict[str, str] = {}
     for chunk in d["result"].split("=== FILE: ")[1:]:
         name, _, body = chunk.partition(" ===")

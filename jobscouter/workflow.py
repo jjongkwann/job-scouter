@@ -19,7 +19,7 @@ _LLM_OPTS = dict(
     start_to_close_timeout=timedelta(minutes=5),
     retry_policy=RetryPolicy(maximum_attempts=3),
 )
-_DRAFT_OPTS = {**_LLM_OPTS, "start_to_close_timeout": timedelta(minutes=15)}
+_DRAFT_OPTS = {**_LLM_OPTS, "start_to_close_timeout": timedelta(minutes=25)}
 _CHAT_OPTS = dict(
     task_queue=Q_CHAT,
     start_to_close_timeout=timedelta(minutes=6),
