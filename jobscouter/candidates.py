@@ -5,7 +5,7 @@ from collections import Counter
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from jobscouter.config import APP_FILES, APPLICATIONS, JOBFEED, _norm, job_cid, settings
+from jobscouter.config import APP_FILES, APPLICATIONS, JOBFEED, _norm, job_cid, job_reference, settings
 
 KST = ZoneInfo("Asia/Seoul")
 MAX = [35, 25, 20, 20]  # 스택/도메인/레벨/역할 배점 상한
@@ -32,6 +32,8 @@ def zone(addr: str | None) -> tuple[int, str]:
 
 def due_label(raw: str | None, today: date) -> tuple[str, str]:
     """(표시, css) — 마감이 지난 후보도 목록에 남으므로 대시보드에서 바로 가려낼 수 있게."""
+    if raw == "closed":
+        return ("마감됨", "gone")
     if not raw or raw == "상시":
         return (raw or "", "")
     try:
@@ -148,8 +150,7 @@ def candidate_rows(today: date | None = None) -> list[dict]:
             "zone": zn, "zone_label": zlabel, "due": due, "due_cls": due_cls, "closed": r[7] == "closed",
             "days_left": days_left(r[7], today), "rec": round(_rec), "rank": None,
             "tier": "t1" if total >= 80 else "t2" if total >= 70 else "t3",
-            "url": (f"https://jumpit.saramin.co.kr/position/{cid[1:]}" if cid.startswith("j")
-                    else f"https://www.wanted.co.kr/wd/{cid}"),
+            **job_reference(cid),
         }
         out.append((row, _rec))
     for i, (row, _) in enumerate(sorted((x for x in out if not x[0]["closed"]
@@ -169,13 +170,16 @@ def app_folders() -> list[dict]:
     for d in sorted(APPLICATIONS.iterdir()):
         if not d.is_dir():
             continue
-        ids: list[str] = []
         files = sorted(p.name for p in d.glob("*.md"))
-        for name in files:
-            for wanted, jumpit in _JOB_URL.findall((d / name).read_text(errors="replace")):
-                cid = wanted or f"j{jumpit}"
-                if cid not in ids:
-                    ids.append(cid)
+        readme = d / "README.md"
+        ids = (re.findall(r"^공고 ID: ([A-Za-z0-9_]+)\s*$", readme.read_text(), re.M)
+               if readme.exists() else [])
+        if not ids:  # 기존 지원서류의 연결 키는 그대로 유지한다.
+            for name in files:
+                for wanted, jumpit in _JOB_URL.findall((d / name).read_text(errors="replace")):
+                    cid = wanted or f"j{jumpit}"
+                    if cid not in ids:
+                        ids.append(cid)
         out.append({"slug": d.name, "ids": ids, "files": files,
                     "docs": [f for f in files if f in APP_FILES],
                     "mtime": datetime.fromtimestamp(d.stat().st_mtime).strftime("%Y-%m-%d")})

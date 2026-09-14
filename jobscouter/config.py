@@ -46,15 +46,20 @@ PKB_STATUSES = _env("JOBSCOUTER_PKB_STATUSES", "canonical,active,evergreen,draft
 # 데이터 repo 레이아웃(JOBFEED.parent가 루트) — 웹앱 열람·지원서류 초안이 쓴다
 RESUME = JOBFEED.parent / "이력서.md"
 SETTINGS = JOBFEED.parent / "settings.json"   # 개인값(검색어·통근 밴드) — 데이터 repo
+COMPANIES = ("daangn", "toss", "samsung", "lg", "sk", "hyundai", "autoever", "mobis")
 
 
 def settings() -> dict:
-    """{"keywords": [...], "zones": [[밴드, 이름, 정규식], ...]}. 없거나 깨지면 빈 값 — 통근은 전부 '미확인'."""
+    """검색어·통근 밴드·공식 채용 사이트. companies 생략 시 모두 수집한다."""
     try:
         d = json.loads(SETTINGS.read_text())
     except (OSError, ValueError):
         d = {}
-    return {"keywords": list(d.get("keywords") or []), "zones": list(d.get("zones") or [])}
+    companies = d.get("companies", list(COMPANIES))
+    if not isinstance(companies, list) or any(c not in COMPANIES for c in companies):
+        raise ValueError(f"companies는 다음 이름의 배열이어야 합니다: {', '.join(COMPANIES)}")
+    return {"keywords": list(d.get("keywords") or []), "zones": list(d.get("zones") or []),
+            "companies": list(dict.fromkeys(companies))}
 
 
 REFERENCES = JOBFEED.parent / "references"
@@ -81,7 +86,35 @@ def _app_slug(company: str) -> str:
 
 def job_cid(j: dict) -> str:
     """jobs.jsonl 한 줄 → candidates.json 관례 id. io_acts(판정 대상)·web(마감 표시)이 공유."""
-    return str(j["id"]) if j["src"] == "wanted" else f"j{j['id']}"
+    prefix = {"wanted": "", "jumpit": "j"}.get(j["src"], f"{j['src']}_")
+    return f"{prefix}{j['id']}"
+
+
+def job_reference(cid: str) -> dict[str, str]:
+    """저장된 ID → 출처·공식 URL. 기존 숫자/점핏 ID는 바꾸지 않는다."""
+    cid = str(cid)
+    if re.fullmatch(r"\d+", cid):
+        return {"src": "wanted", "url": f"https://www.wanted.co.kr/wd/{cid}"}
+    if re.fullmatch(r"j\d+", cid):
+        return {"src": "jumpit", "url": f"https://jumpit.saramin.co.kr/position/{cid[1:]}"}
+    src, _, pid = cid.partition("_")
+    patterns = {"daangn": r"\d+", "toss": r"\d+", "samsung": r"\d+_\d+",
+                "sk": r"R\d+", "hyundai": r"\d{4}_[A-Za-z0-9]+_\d+",
+                "autoever": r"\d+", "mobis": r"\d+", "lg": r"\d+_\d+"}
+    if src not in patterns or not re.fullmatch(patterns[src], pid):
+        raise ValueError(f"알 수 없는 공고 ID: {cid}")
+    urls = {"daangn": f"https://careers.daangn.com/jobs/role/{pid}/",
+            "toss": f"https://toss.im/career/job-detail?job_id={pid}",
+            "samsung": f"https://www.samsungcareers.com/hr/?no={pid.split('_')[0]}",
+            "sk": f"https://www.skcareers.com/Recruit/Detail/{pid}",
+            "autoever": f"https://career.hyundai-autoever.com/ko/o/{pid}",
+            "mobis": f"https://careers.mobis.com/jobs-view?seq={pid}",
+            "lg": f"https://careers.lg.com/apply/detail?id={pid.split('_')[0]}"}
+    if src == "hyundai":
+        year, kind, number = pid.split("_")
+        urls[src] = (f"https://talent.hyundai.com/apply/applyView.hc?recuYy={year}"
+                     f"&recuType={kind}&recuCls={number}")
+    return {"src": src, "url": urls[src]}
 
 
 @dataclass
@@ -99,10 +132,10 @@ class PublishParams:
 
 @dataclass
 class Target:
-    id: str        # 원티드 "365172" | 점핏 "j54800311" — candidates.json 관례
+    id: str        # 원티드 "365172" | 점핏 "j54800311" | 기업 "daangn_7990084003"
     company: str
     title: str
-    src: str       # "wanted" | "jumpit"
+    src: str       # wanted | jumpit | COMPANIES
     url: str
 
 

@@ -1,6 +1,7 @@
 import hashlib
 import json
 import subprocess
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -571,6 +572,30 @@ def test_listed_target_from_candidates(tmp_path, monkeypatch):
     assert io_acts.listed_target("j54736975")["url"] == "https://jumpit.saramin.co.kr/position/54736975"
     with pytest.raises(ValueError):
         io_acts.listed_target("999")
+
+
+def test_company_posting_reaches_judge_and_draft_without_truncating(tmp_path, monkeypatch):
+    job = {"src": "daangn", "id": "12", "description": "소개 " * 1000 + "필수: Python LLM 운영"}
+    (tmp_path / "jobs.jsonl").write_text(json.dumps(job) + "\n")
+    (tmp_path / "candidates.json").write_text(json.dumps({"rows": [
+        ["AI Platform", "당근", "daangn_12", [30, 20, 20, 20], None, "메모", [], None]], "skipped": {}}))
+    monkeypatch.setattr(io_acts, "JOBFEED", tmp_path)
+    target = Target(id="daangn_12", company="당근", title="AI Platform", **config.job_reference("daangn_12"))
+    assert io_acts.fetch_requirements(target).endswith("필수: Python LLM 운영")
+    assert io_acts.fetch_posting_full(target) == job["description"]
+    assert io_acts.listed_target("daangn_12")["url"] == target.url
+    assert io_acts._expired("closed", date.today())
+    job["pdfs"] = [{"title": "직무소개서", "url": "https://www.samsungcareers.com/download?x=1"}]
+    (tmp_path / "jobs.jsonl").write_text(json.dumps(job) + "\n")
+    monkeypatch.setattr(io_acts.company_jobs, "pdf_text", lambda url: "[PDF 10쪽] 필수: Python")
+    text = io_acts.fetch_requirements(target)
+    assert "판정 대상: AI Platform" in text and "[PDF 10쪽] 필수: Python" in text
+    assert text == io_acts.fetch_posting_full(target)
+    def failed(url):
+        raise ValueError("PDF 추출 실패")
+    monkeypatch.setattr(io_acts.company_jobs, "pdf_text", failed)
+    with pytest.raises(ValueError, match="PDF 추출 실패"):
+        io_acts.fetch_requirements(target)
 
 
 def test_chat_load_creates_session(tmp_path, monkeypatch):

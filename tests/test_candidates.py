@@ -93,3 +93,13 @@ def test_job_index_prefers_original_folder_over_draft_slot(repo):
         (apps / name / "README.md").write_text("공고: https://www.wanted.co.kr/wd/333\n")
     assert C.job_index()["333"]["slug"] == "a_1"
     assert C.job_index()["222"]["slug"] == "test_co"
+
+
+def test_company_documents_join_by_id_even_when_roles_share_url(repo):
+    for cid in ("samsung_12_10", "samsung_12_11"):
+        folder = repo / "applications" / cid
+        folder.mkdir()
+        (folder / "README.md").write_text(f"공고: https://www.samsungcareers.com/hr/?no=12\n공고 ID: {cid}\n")
+    index = C.job_index()
+    assert index["samsung_12_10"]["slug"] == "samsung_12_10"
+    assert index["samsung_12_11"]["slug"] == "samsung_12_11"

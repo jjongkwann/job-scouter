@@ -9,11 +9,12 @@ from datetime import date, datetime
 
 from temporalio import activity
 
+from jobscouter import company_jobs
 from jobscouter.candidates import KST, days_left, dues
 from jobscouter.config import (APP_FILES, APPLICATIONS, CHAT_DIR, CHAT_DONE, JOBFEED,
                                 PKB_CATEGORIES, PKB_INDEX, PKB_STATUSES, PROPOSALS,
                                 RESUME_PROPOSALS, RUBRIC_VERSION, SID_RE, Target, _app_slug,
-                                _norm, git_path_at, job_cid, resume_target)
+                                _norm, git_path_at, job_cid, job_reference, resume_target)
 from jobscouter.search import es
 
 
@@ -98,7 +99,7 @@ def sync_repo() -> str:
 def _expired(due, today: date) -> bool:
     """'YYYY-MM-DD' 마감이 오늘(KST)보다 이전이면 참. '상시'·없음·못 읽는 값은 거짓."""
     left = days_left(due, today)
-    return left is not None and left < 0
+    return due == "closed" or (left is not None and left < 0)
 
 
 @activity.defn
@@ -133,12 +134,31 @@ def load_targets() -> list[Target]:
     return out
 
 
+def _company_posting(t: Target) -> str:
+    """스캔에서 저장한 공식 공고 본문 — 채점과 초안이 같은 원문을 사용한다."""
+    for line in (JOBFEED / "jobs.jsonl").read_text().splitlines():
+        job = json.loads(line)
+        if job_cid(job) == t.id:
+            text = job.get("description", "").strip()
+            if not text:
+                break
+            for pdf in job.get("pdfs", []):
+                text += (f"\n\n[첨부: {pdf['title']}] {pdf['url']}\n"
+                         f"판정 대상: {t.title}. 여러 직무가 포함된 자료이므로 이 직무와 공통 요건만 "
+                         "사용하고, 다른 직무의 필수·우대 요건을 적용하지 마세요.\n" +
+                         company_jobs.pdf_text(pdf["url"]))
+            return text
+    raise ValueError(f"{t.id}: 저장된 공식 공고 본문 없음 — 수집을 먼저 실행하세요")
+
+
 @activity.defn
 def fetch_requirements(t: Target) -> str:
     """자격요건 원문 + [우대사항]. 원티드: detail.requirements·preferred_points / 점핏:
     qualifications(복수!)+responsibility 첫 2줄+preferredRequirements. 우대는 루브릭이 제외
     판단(직군·주력 스택 파악)에만 쓴다 — 필수가 빈 공고는 우대에만 스택이 적혀 있다.
     점핏 단수 qualification은 조용히 None — '필수요건 없음' 오독 사고 이력(SKILL.md)."""
+    if t.src not in ("wanted", "jumpit"):
+        return _company_posting(t)
     if t.src == "wanted":
         detail = _get(f"https://www.wanted.co.kr/api/v4/jobs/{t.id}")["job"]["detail"]
         text = (detail.get("requirements") or "").strip()
@@ -159,6 +179,8 @@ def fetch_requirements(t: Target) -> str:
 def fetch_posting_full(t: Target) -> str:
     """지원서류 초안용 공고 전문. fetch_requirements(300자 캡)와 달리 소개·주요업무·
     자격요건·우대사항·복지까지 전부 담는다. 캡 6000자."""
+    if t.src not in ("wanted", "jumpit"):
+        return _company_posting(t)
     if t.src == "wanted":
         d = _get(f"https://www.wanted.co.kr/api/v4/jobs/{t.id}")
         job = d["job"]
@@ -192,7 +214,7 @@ def to_row(j: dict) -> list:
     """Judgment → candidates.json 8필드 행. 마감·근무지는 refresh_due.py가 채운다.
     평판 배열 자동 기입은 범위 외 — rep=null + 사유로 두고 사람이 보강한다."""
     cid = j["id"]
-    rid = int(cid) if not cid.startswith("j") else cid   # 기존 관례: 원티드 int
+    rid = int(cid) if cid.isdigit() else cid   # 기존 원티드 숫자 ID 유지
     reason = (f"자동판정 rubric {j['rubric_version']} (conf {j['confidence']:.2f}) — "
               f"{j['reason']}")[:200]
     return [j["title"], j["company"], rid, j["scores"], None, reason, [], None]
@@ -277,17 +299,14 @@ def load_proposals(ids: list[str]) -> list[dict]:
 @activity.defn
 def listed_target(cid: str) -> dict:
     """등재된 공고 id → Target dict(+판정 scores·reason) — Draft가 초안을 (재)생성할 때.
-    회사·제목·점수·사유는 candidates.json 행에서, src·url은 id 관례(j접두=점핏)에서 정한다.
+    회사·제목·점수·사유는 candidates.json 행에서, src·url은 공유 ID 해석 함수에서 정한다.
     scores·reason은 draft_application이 약한 축을 보완하는 근거를 앞세우는 데 쓴다."""
     cand = json.loads((JOBFEED / "candidates.json").read_text())
     for r in cand["rows"]:
         if str(r[2]) == cid:
-            jumpit = cid.startswith("j")
             return {"id": cid, "company": r[1], "title": r[0],
                     "scores": list(r[3]), "reason": r[5] or "",
-                    "src": "jumpit" if jumpit else "wanted",
-                    "url": (f"https://jumpit.saramin.co.kr/position/{cid[1:]}" if jumpit
-                            else f"https://www.wanted.co.kr/wd/{cid}")}
+                    **job_reference(cid)}
     raise ValueError(f"candidates.json 등재 행에 {cid} 없음 — 등재된 공고만 초안을 만든다")
 
 
@@ -319,8 +338,8 @@ def write_application(target: dict, files: dict[str, str]) -> str:
     `_draft`는 재생성 슬롯 하나다 — 재생성할 때마다 의도적으로 덮어쓴다(이전 재생성본은
     git 이력에 있다). commit+push.
 
-    README 첫 줄의 `공고:` URL이 **후보목록과의 유일한 연결 키**다 — 폴더명은 사람이
-    바꿔 두는 일이 잦아 이름으로는 못 잇는다(candidates.job_index 참조)."""
+    README의 공고 ID로 후보와 연결한다. 삼성의 직무별 공고는 URL을 공유하므로
+    URL만으로 연결하면 다른 직무의 지원서류가 섞인다."""
     company = target["company"]
     slug = f"{_app_slug(company)}_{target['id']}"   # 정규식이 경로 문자를 전부 제거 — 탈출 불가
     files = {n: c for n, c in files.items() if n in APP_FILES}  # LLM이 준 파일명은 allowlist만
@@ -335,6 +354,7 @@ def write_application(target: dict, files: dict[str, str]) -> str:
     readme = (
         f"# {company} 지원서류\n\n"
         f"공고: {target['url']}\n"
+        f"공고 ID: {target['id']}\n"
         f"상태: 초안 (자동 생성 {date.today().isoformat()})\n\n"
         "## 파일\n" + "\n".join(f"- {n}" for n in sorted(files)) +
         "\n\n## 지원 전 체크리스트\n"

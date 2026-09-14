@@ -10,7 +10,7 @@ from jobscouter import config, jobfeed
 def repo(tmp_path, monkeypatch):
     jobfeed_dir = tmp_path / "jobfeed"
     jobfeed_dir.mkdir()
-    (tmp_path / "settings.json").write_text(json.dumps({"keywords": ["LLM"], "zones": []}))
+    (tmp_path / "settings.json").write_text(json.dumps({"keywords": ["LLM"], "zones": [], "companies": []}))
     (jobfeed_dir / "candidates.json").write_text(json.dumps({"rows": [
         ["백엔드", "테스트회사", 222, [30, 18, 20, 16], None, "", [], None],
         ["플랫폼", "다른회사", "j5", [20, 15, 15, 12], None, "", [], "2026-09-01", "옛주소"],
@@ -80,3 +80,48 @@ def test_refresh_due_keeps_value_on_network_error(repo, monkeypatch):
     jobfeed.refresh_due()
     rows = json.loads((repo / "candidates.json").read_text())["rows"]
     assert rows[1][7] == "2026-09-01" and len(rows[0]) == 9 and rows[0][7] is None
+
+
+def test_company_scan_preserves_history_updates_body_and_closes_missing(repo, monkeypatch):
+    (repo.parent / "settings.json").write_text(json.dumps({"keywords": ["LLM"], "companies": ["daangn"]}))
+    monkeypatch.setattr(jobfeed, "_wanted", lambda kw: iter(()))
+    monkeypatch.setattr(jobfeed, "_jumpit", lambda kw: iter(()))
+    job = {"src": "daangn", "id": "12", "title": "AI Platform", "company": "당근",
+           "url": "https://careers.daangn.com/jobs/role/12/", "description": "Python LLM 경험",
+           "due": "상시", "loc": "", "career": "경력", "stacks": []}
+    monkeypatch.setattr(jobfeed.company_jobs, "load", lambda source: [job.copy()])
+    jobfeed.fetch_jobs()
+    first = json.loads((repo / "jobs.jsonl").read_text())
+    assert first["id"] == "12" and first["kw"] == "LLM"
+    job["description"] = "LLM 서비스를 운영한 경험"
+    jobfeed.fetch_jobs()
+    second = json.loads((repo / "jobs.jsonl").read_text())
+    assert second["found"] == first["found"] and second["description"] == job["description"]
+    monkeypatch.setattr(jobfeed.company_jobs, "load", lambda source: [])
+    jobfeed.fetch_jobs()
+    assert json.loads((repo / "jobs.jsonl").read_text())["due"] == "closed"
+
+
+def test_company_failure_keeps_previous_posting_and_reports_failure(repo, monkeypatch):
+    (repo.parent / "settings.json").write_text(json.dumps({"keywords": ["LLM"], "companies": ["sk"]}))
+    previous = {"src": "sk", "id": "R1", "due": "2026-09-30", "description": "LLM"}
+    (repo / "jobs.jsonl").write_text(json.dumps(previous) + "\n")
+    monkeypatch.setattr(jobfeed, "_wanted", lambda kw: iter(()))
+    monkeypatch.setattr(jobfeed, "_jumpit", lambda kw: iter(()))
+    def fail(source):
+        raise OSError("timeout")
+    monkeypatch.setattr(jobfeed.company_jobs, "load", fail)
+    assert "sk 조회 실패: timeout" in jobfeed.fetch_jobs()
+    assert json.loads((repo / "jobs.jsonl").read_text()) == previous
+
+
+def test_company_deadline_distinguishes_closed_from_fetch_failure(monkeypatch):
+    def fail(code):
+        def detail(src, pid):
+            raise urllib.error.HTTPError("https://careers.daangn.com/", code, "error", {}, None)
+        return detail
+    monkeypatch.setattr(jobfeed.company_jobs, "detail", fail(404))
+    assert jobfeed._due("daangn_12") == (None, False, None)
+    monkeypatch.setattr(jobfeed.company_jobs, "detail", fail(503))
+    with pytest.raises(urllib.error.HTTPError):
+        jobfeed._due("daangn_12")

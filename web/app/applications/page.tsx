@@ -32,8 +32,7 @@ export default function ApplicationsPage() {
       title="지원서류"
       sub={
         <>
-          폴더와 등재 공고를 <b>공고 id</b>로 이어 한 줄로 보여줍니다 — 회사명이 아니라 문서에 적힌{' '}
-          <code>wanted.co.kr/wd/{'{id}'}</code>가 연결 키입니다. 승인한 공고는 Publish가{' '}
+          공고별 지원서류를 모아 보여줍니다. 승인한 공고는{' '}
           <b>JD·맞춤 이력서·자기소개서·면접지식맵·포트폴리오 구성</b> 5종 초안을 만들어 두고, 검토는 사람이 합니다.
         </>
       }

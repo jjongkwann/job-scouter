@@ -4,7 +4,7 @@ import type { Candidate } from './api'
 import { ALL, applyFilters, isDead, scoreCells, sortRows } from './candidates'
 
 const mk = (o: Partial<Candidate>): Candidate => ({
-  id: '1', company: 'a', title: '', url: '', scores: [30, 18, 20, 16, 0], total: 84, tier: 't1',
+  id: '1', company: 'a', title: '', url: '', src: 'wanted', scores: [30, 18, 20, 16, 0], total: 84, tier: 't1',
   rep: null, rep_key: 'none', rep_label: '', rep_note: '', tags: [], addr: '', zone: 9, zone_label: '',
   due: '', due_cls: '', days_left: null, closed: false, rec: 80, rank: 1, ...o,
 })

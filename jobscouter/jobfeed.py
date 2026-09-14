@@ -1,4 +1,4 @@
-"""공고 수집(원티드·점핏)과 마감·근무지 갱신 — io 큐 activity. 자격증명 없음, 공개 API만."""
+"""채용 플랫폼·기업 공식 공고 수집과 마감·근무지 갱신 — io 큐 activity."""
 import json
 import re
 import sys
@@ -6,11 +6,13 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
 from temporalio import activity
 
-from jobscouter.config import JOBFEED, _norm, job_cid, settings
+from jobscouter import company_jobs
+from jobscouter.config import JOBFEED, _norm, job_cid, job_reference, settings
 from jobscouter.io_acts import _HDR, _SSL  # 순환 import 없음 — io_acts가 jobfeed를 import하지 않는다
 
 _WANTED_SEARCH = "https://www.wanted.co.kr/api/chaos/search/v1/results?"
@@ -88,13 +90,16 @@ def _tag(job: dict, tracked: set, bad: set, ids: set) -> str:
 
 @activity.defn
 def fetch_jobs() -> str:
-    """원티드+점핏 수집 → jobs.jsonl append, new.md(gitignore) 갱신. 반환: 요약 한 줄."""
+    """신규 공고 저장·기업 공고 스냅샷 갱신. 원본 found와 기존 ID는 유지한다."""
     store = JOBFEED / "jobs.jsonl"
     digest = JOBFEED / "new.md"
-    seen = ({f"{j['src']}:{j['id']}" for j in map(json.loads, store.read_text().splitlines())}
-            if store.exists() else set())
+    records = ([json.loads(line) for line in store.read_text().splitlines() if line.strip()]
+               if store.exists() else [])
+    existing = {f"{j['src']}:{j['id']}": j for j in records}
+    seen = set(existing)
     new: dict[str, dict] = {}
-    for kw in settings()["keywords"]:
+    options = settings()
+    for kw in options["keywords"]:
         for source in (_wanted, _jumpit):
             try:
                 for job in source(kw):
@@ -104,12 +109,43 @@ def fetch_jobs() -> str:
             except Exception as e:  # 한 소스가 죽어도 나머지는 수집
                 print(f"! {source.__name__}/{kw}: {e}", file=sys.stderr)
 
-    with store.open("a") as f:
-        for job in new.values():
-            f.write(json.dumps({**job, "found": date.today().isoformat()}, ensure_ascii=False) + "\n")
+    summaries = []
+    sources = options["companies"] if options["keywords"] else []
+    # 소스 간에만 병렬 조회 — 같은 회사에는 순서대로 요청한다.
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        pending = {source: pool.submit(company_jobs.load, source) for source in sources}
+        for source, future in pending.items():
+            try:
+                jobs = future.result()
+            except Exception as e:
+                summaries.append(f"{source} 조회 실패: {e}")
+                print(f"! {summaries[-1]}", file=sys.stderr)
+                continue  # 실패한 수집원의 이전 공고를 마감 처리하지 않는다.
+            current = {f"{j['src']}:{j['id']}" for j in jobs}
+            for key, previous in existing.items():
+                if previous["src"] == source and key not in current:
+                    previous["due"] = "closed"
+            matched = 0
+            for job in jobs:
+                key = f"{job['src']}:{job['id']}"
+                text = f"{job['title']}\n{job['description']}".casefold()
+                keyword = next((kw for kw in options["keywords"] if kw.casefold() in text), None)
+                job["kw"] = keyword or ""
+                if key in existing:
+                    existing[key].update(job)
+                elif keyword and job["due"] != "closed":
+                    new[key] = job
+                matched += keyword is not None
+            summaries.append(f"{source} {len(jobs)}건 확인·키워드 일치 {matched}건")
+
+    records.extend({**job, "found": date.today().isoformat()} for job in new.values())
+    temp = store.with_suffix(".jsonl.tmp")
+    temp.write_text("".join(json.dumps(j, ensure_ascii=False) + "\n" for j in records))
+    temp.replace(store)
+    summary = (" · " + "; ".join(summaries)) if summaries else ""
 
     if not new:  # 재실행해도 직전 다이제스트를 날리지 않음
-        return f"새 공고 없음 (누적 {len(seen)}건)"
+        return f"새 공고 없음 (누적 {len(seen)}건){summary}"
 
     tracked, bad, ids = _known()
     order = {"신규": 0, "기추적": 1, "🚫": 2}
@@ -128,7 +164,7 @@ def fetch_jobs() -> str:
             f"[{job['src']}:{job['kw']}]{stacks}"
         )
     digest.write_text("\n".join(lines) + "\n")
-    return f"새 공고 {len(new)}건 (신규 {n_new}) → new.md (누적 {len(seen) + len(new)}건)"
+    return f"새 공고 {len(new)}건 (신규 {n_new}) → new.md (누적 {len(seen) + len(new)}건){summary}"
 
 
 def _due(pid) -> tuple:
@@ -137,7 +173,17 @@ def _due(pid) -> tuple:
     원티드는 status 필드로 생존을 알리지만 점핏은 내려간 공고에 HTTP 400을 준다 —
     네트워크 실패와 구분해서 잡아야 호출자의 "실패 시 값 유지"에 걸려 마감된 공고가
     살아 있는 것처럼 남지 않는다."""
-    if str(pid).startswith("j"):
+    source = job_reference(str(pid))["src"]
+    if source not in ("wanted", "jumpit"):
+        try:
+            job = company_jobs.detail(source, str(pid).partition("_")[2])
+        except urllib.error.HTTPError as e:
+            if e.code in (404, 410):
+                return None, False, None
+            raise
+        return (None if job["due"] in ("상시", "closed") else job["due"],
+                job["due"] != "closed", job["loc"])
+    if source == "jumpit":
         try:
             res = _get(_JUMPIT_JOB.format(str(pid)[1:]))["result"]
         except urllib.error.HTTPError as e:

@@ -19,7 +19,7 @@ export type Dashboard = {
 }
 
 export type Candidate = {
-  id: string; company: string; title: string; url: string; scores: number[]; total: number; tier: Tier
+  id: string; company: string; title: string; url: string; src: string; scores: number[]; total: number; tier: Tier
   rep: [Rail, number, number | null, number | string, string] | null; rep_key: Rail; rep_label: string; rep_note: string
   tags: string[]; addr: string; zone: number; zone_label: string; due: string; due_cls: DueCls; days_left: number | null
   closed: boolean; rec: number; rank: number | null

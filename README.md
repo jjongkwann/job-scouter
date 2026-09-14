@@ -81,6 +81,42 @@ import하지 않는다(테스트로 강제). API 키 불필요. 호출당 지출
 
 서버 설치: `deploy/SERVER_SETUP.md`. 설계·계획 문서: `docs/specs/` · `docs/plans/`.
 
+원티드·점핏 검색과 함께 다음 공식 채용 사이트도 수집한다. 기업 사이트는 전체 공고의
+제목·본문을 읽고 `keywords` 중 하나라도 포함된 공고를 저장한다(영문 대소문자 무시).
+검색어가 비어 있으면 수집하지 않는다.
+
+| 설정 이름 | 공식 채용 사이트 범위 |
+|---|---|
+| `daangn` | [당근](https://careers.daangn.com/jobs/) |
+| `toss` | [토스 공동 채용](https://toss.im/career/jobs) |
+| `samsung` | [삼성 공동 채용](https://www.samsungcareers.com/hr/) — 공고 안의 직무별로 구분 |
+| `lg` | [LG Careers](https://careers.lg.com/apply) — LG CNS 신입·경력·인턴, 직무별로 구분 |
+| `sk` | [SK 공동 채용](https://www.skcareers.com/Recruit) |
+| `hyundai` | [현대자동차](https://talent.hyundai.com/) |
+| `autoever` | [현대오토에버](https://career.hyundai-autoever.com/ko/apply) |
+| `mobis` | [현대모비스](https://careers.mobis.com/jobs) |
+
+`settings.json`의 `companies`를 생략하면 위 8개를 모두 확인한다. 일부만 확인하려면
+예를 들어 `"companies": ["daangn", "toss", "hyundai", "autoever", "mobis"]`를 추가한다.
+빈 배열이면 기업 사이트 수집을 끈다. 기존 `keywords`·`zones` 설정과 공고 ID는 유지한다.
+
+기업 공고의 본문·마감·근무지를 `jobs.jsonl`에 저장하고, 본문 전체를 판정·지원서류
+초안에 전달한다. 사이트 전체 조회가 성공했을 때만 목록에서 사라진 공고를 마감 처리한다.
+조회 실패는 수집 결과와 워커 로그에 남고, 이전 데이터는 유지한다. 지원서류 README의
+`공고 ID`로 같은 URL을 공유하는 삼성 직무도 구분한다.
+
+삼성 첨부 PDF 링크도 저장하고, 판정·지원서류 초안 작성 시 첨부 전문을 읽는다.
+이미지 PDF는 한국어·영어 OCR로 읽고 페이지 번호와 인식 한계를 표시한다.
+여러 직무가 함께 담긴 첨부는 해당 직무·공통 요건만 판정하도록 구분한다.
+첨부 다운로드·추출 실패는 판정 실패로 남겨 본문만으로 불완전하게 확정하지 않는다.
+검색어는 목록의 제목·본문에 적용하므로 `SW개발`, `AX` 같은 직무명도 설정하면
+기술 스택이 첨부에만 적힌 공고를 찾을 수 있다.
+
+SK의 이미지 공고는 Tesseract의 한국어·영어 OCR로 읽는다. Docker 이미지에 포함되어 있다.
+호스트에서 io 워커를 실행한다면 `tesseract`와 `kor`·`eng` 언어 데이터가 필요하다
+(macOS: `brew install tesseract tesseract-lang`, Debian: `apt-get install tesseract-ocr tesseract-ocr-kor`).
+이미지를 읽지 못하면 해당 사이트의 조회 실패로 기록한다.
+
 ## 운영
 
 io 워커는 `.env`에 `JOBSCOUTER_JOBFEED`가 있어야 뜬다(없으면 거부) — 데이터 경로
