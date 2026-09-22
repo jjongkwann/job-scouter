@@ -125,3 +125,32 @@ def test_company_deadline_distinguishes_closed_from_fetch_failure(monkeypatch):
     monkeypatch.setattr(jobfeed.company_jobs, "detail", fail(503))
     with pytest.raises(urllib.error.HTTPError):
         jobfeed._due("daangn_12")
+
+
+def test_remember_rescan_updates_snapshot_and_keeps_unreturned_jobs(repo, monkeypatch):
+    (repo.parent / "settings.json").write_text(json.dumps({"keywords": ["LLM"], "companies": ["remember"]}))
+    monkeypatch.setattr(jobfeed, "_wanted", lambda kw: iter(()))
+    monkeypatch.setattr(jobfeed, "_jumpit", lambda kw: iter(()))
+    job = {"src": "remember", "id": "12", "title": "AI 개발", "company": "채용회사",
+           "url": "https://career.rememberapp.co.kr/job/posting/12", "description": "API 개발",
+           "due": "2999-09-28", "loc": "성남시", "career": "3~5년", "stacks": ["LLM"]}
+    monkeypatch.setattr(jobfeed.company_jobs, "load", lambda source: [job.copy()])
+    jobfeed.fetch_jobs()
+    first = json.loads((repo / "jobs.jsonl").read_text())
+    job["description"] = "API 개발·운영"
+    assert "새 공고 없음" in jobfeed.fetch_jobs()
+    second = json.loads((repo / "jobs.jsonl").read_text())
+    assert second["found"] == first["found"] and second["description"] == job["description"]
+    monkeypatch.setattr(jobfeed.company_jobs, "load", lambda source: [])
+    monkeypatch.setattr(jobfeed.company_jobs, "detail", lambda source, pid: job.copy())
+    jobfeed.fetch_jobs()
+    assert json.loads((repo / "jobs.jsonl").read_text())["due"] == "2999-09-28"
+    def unavailable(source, pid):
+        raise urllib.error.HTTPError(job["url"], 503, "unavailable", {}, None)
+    monkeypatch.setattr(jobfeed.company_jobs, "detail", unavailable)
+    assert "remember/12 상태 조회 실패" in jobfeed.fetch_jobs()
+    assert json.loads((repo / "jobs.jsonl").read_text())["due"] == "2999-09-28"
+    monkeypatch.setattr(jobfeed.company_jobs, "detail", lambda source, pid: {**job, "due": "closed"})
+    assert jobfeed._due("remember_12") == (None, False, "성남시")
+    jobfeed.fetch_jobs()
+    assert json.loads((repo / "jobs.jsonl").read_text())["due"] == "closed"

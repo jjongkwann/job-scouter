@@ -13,7 +13,7 @@ from temporalio import activity
 
 from jobscouter import company_jobs
 from jobscouter.config import JOBFEED, _norm, job_cid, job_reference, settings
-from jobscouter.io_acts import _HDR, _SSL  # 순환 import 없음 — io_acts가 jobfeed를 import하지 않는다
+from jobscouter.io_acts import _HDR, _SSL, _expired  # io_acts는 jobfeed를 import하지 않는다
 
 _WANTED_SEARCH = "https://www.wanted.co.kr/api/chaos/search/v1/results?"
 _JUMPIT_SEARCH = "https://jumpit-api.saramin.co.kr/api/positions?"
@@ -123,12 +123,27 @@ def fetch_jobs() -> str:
                 continue  # 실패한 수집원의 이전 공고를 마감 처리하지 않는다.
             current = {f"{j['src']}:{j['id']}" for j in jobs}
             for key, previous in existing.items():
-                if previous["src"] == source and key not in current:
+                if previous["src"] != source or key in current:
+                    continue
+                if source == "remember":
+                    # 검색에서 빠진 공고는 상세 상태로 확인한다. 조회 실패 시 이전 값 보존.
+                    if _expired(previous.get("due"), date.today()):
+                        continue
+                    try:
+                        previous.update(company_jobs.detail(source, str(previous["id"])))
+                    except urllib.error.HTTPError as e:
+                        if e.code in (404, 410):
+                            previous["due"] = "closed"
+                        else:
+                            summaries.append(f"{source}/{previous['id']} 상태 조회 실패: {e}")
+                    except Exception as e:
+                        summaries.append(f"{source}/{previous['id']} 상태 조회 실패: {e}")
+                else:
                     previous["due"] = "closed"
             matched = 0
             for job in jobs:
                 key = f"{job['src']}:{job['id']}"
-                text = f"{job['title']}\n{job['description']}".casefold()
+                text = f"{job['title']}\n{job['description']}\n{' '.join(job['stacks'])}".casefold()
                 keyword = next((kw for kw in options["keywords"] if kw.casefold() in text), None)
                 job["kw"] = keyword or ""
                 if key in existing:

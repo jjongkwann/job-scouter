@@ -343,6 +343,9 @@ def _mobis(pid):
 
 def load(source: str) -> list[dict]:
     """목록 전체를 읽는다. 한 페이지/본문이라도 실패하면 완료로 취급하지 않는다."""
+    if source == "remember":
+        from jobscouter import remember
+        return remember.load()
     if source in ("daangn", "mobis"):
         url, pattern = {
             "daangn": ("https://careers.daangn.com/jobs/", r"/jobs/role/(\d+)/"),
@@ -360,5 +363,8 @@ def load(source: str) -> list[dict]:
 
 def detail(source: str, pid: str) -> dict:
     job_reference(f"{source}_{pid}")  # URL에 넣기 전에 출처와 외부 ID 검증
+    if source == "remember":
+        from jobscouter import remember
+        return remember.detail(pid)
     return {"daangn": _daangn, "toss": _toss, "samsung": _samsung, "sk": _sk,
             "hyundai": _hyundai, "autoever": _autoever, "mobis": _mobis, "lg": _lg}[source](pid)

@@ -68,7 +68,7 @@ export default function JobApplicationPage({ params }: { params: Promise<{ cid: 
     )
 
   const { candidate: c, folder, folders, others, docs, drafting } = data
-  const src = c.src === 'wanted' ? '원티드' : c.src === 'jumpit' ? '점핏' : '공식 채용'
+  const src = c.src === 'wanted' ? '원티드' : c.src === 'jumpit' ? '점핏' : c.src === 'remember' ? '리멤버' : '공식 채용'
   const status = c.closed ? '공고 마감' : folder ? '미지원' : '초안 없음'
   const extra = folder ? folder.files.filter((f) => !APP_FILES.includes(f)) : []
 

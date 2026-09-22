@@ -58,6 +58,14 @@ flowchart LR
 
 데이터 repo에는 md·json과 `settings.json`만 둔다 — 코드도 HTML도 이 저장소에 있다.
 
+리멤버(`career.rememberapp.co.kr`)는 `settings.json`의 `companies` 배열에 `remember`를
+추가하면 기존 매일 09:07 KST `DailyScan`에 포함된다. 같은 `keywords`로 공개 API의
+제목·기술 태그 검색을 끝 페이지까지 조회하고, 본문·태그를 대조해 수집한다.
+`remember_공고번호`로 원문·필수/우대 요건·마감·근무지를 저장하며 재수집 시 중복을 만들지 않는다.
+검색에서 빠진 기존 공고는 상세 상태를 확인하고, 조회 실패 시 이전 데이터를 보존한다.
+신규 공고는 기존 예산·제외 규칙으로 평가해 승인 대기에 올린다. 기업평판 리뷰 본문 조사는
+기존처럼 별도 조사이며, 로그인이나 지원서 제출은 자동화하지 않는다.
+
 큐 4개는 자격증명 격리 경계다. 판정·보고서·지원서류 초안·이력서 갱신 제안·채팅은
 Codex CLI(`codex exec`)의 `gpt-6-astra`·`xhigh`로 생성한다.
 llm 워커만 로그인된 Codex 인증을 사용하고, io·workflow·api는 실행 경계인

@@ -47,11 +47,11 @@ PKB_STATUSES = _env("JOBSCOUTER_PKB_STATUSES", "canonical,active,evergreen,draft
 # 데이터 repo 레이아웃(JOBFEED.parent가 루트) — 웹앱 열람·지원서류 초안이 쓴다
 RESUME = JOBFEED.parent / "이력서.md"
 SETTINGS = JOBFEED.parent / "settings.json"   # 개인값(검색어·통근 밴드) — 데이터 repo
-COMPANIES = ("daangn", "toss", "samsung", "lg", "sk", "hyundai", "autoever", "mobis")
+COMPANIES = ("daangn", "toss", "samsung", "lg", "sk", "hyundai", "autoever", "mobis", "remember")
 
 
 def settings() -> dict:
-    """검색어·통근 밴드·공식 채용 사이트. companies 생략 시 모두 수집한다."""
+    """검색어·통근 밴드·추가 채용 수집원. companies 생략 시 모두 수집한다."""
     try:
         d = json.loads(SETTINGS.read_text())
     except (OSError, ValueError):
@@ -101,7 +101,7 @@ def job_reference(cid: str) -> dict[str, str]:
     src, _, pid = cid.partition("_")
     patterns = {"daangn": r"\d+", "toss": r"\d+", "samsung": r"\d+_\d+",
                 "sk": r"R\d+", "hyundai": r"\d{4}_[A-Za-z0-9]+_\d+",
-                "autoever": r"\d+", "mobis": r"\d+", "lg": r"\d+_\d+"}
+                "autoever": r"\d+", "mobis": r"\d+", "lg": r"\d+_\d+", "remember": r"\d+"}
     if src not in patterns or not re.fullmatch(patterns[src], pid):
         raise ValueError(f"알 수 없는 공고 ID: {cid}")
     urls = {"daangn": f"https://careers.daangn.com/jobs/role/{pid}/",
@@ -110,7 +110,8 @@ def job_reference(cid: str) -> dict[str, str]:
             "sk": f"https://www.skcareers.com/Recruit/Detail/{pid}",
             "autoever": f"https://career.hyundai-autoever.com/ko/o/{pid}",
             "mobis": f"https://careers.mobis.com/jobs-view?seq={pid}",
-            "lg": f"https://careers.lg.com/apply/detail?id={pid.split('_')[0]}"}
+            "lg": f"https://careers.lg.com/apply/detail?id={pid.split('_')[0]}",
+            "remember": f"https://career.rememberapp.co.kr/job/posting/{pid}"}
     if src == "hyundai":
         year, kind, number = pid.split("_")
         urls[src] = (f"https://talent.hyundai.com/apply/applyView.hc?recuYy={year}"
