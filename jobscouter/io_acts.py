@@ -16,6 +16,7 @@ from jobscouter.config import (APP_FILES, APPLICATIONS, CHAT_DIR, CHAT_DONE, JOB
                                 RESUME_PROPOSALS, RUBRIC_VERSION, SID_RE, Target, _app_slug,
                                 _norm, git_path_at, job_cid, job_reference, resume_target)
 from jobscouter.search import es
+from jobscouter.eligibility import career_label, careers, needs_experience_review
 
 
 # proposals.json에 남기는 필드 — usage·cached는 판정 내부용이라 뺀다. exclude 판정도 남겨야
@@ -108,11 +109,16 @@ def load_targets() -> list[Target]:
     proposals.json의 exclude 판정은 루브릭 버전과 무관하게 완료로 본다. pending 판정은 현 버전일
     때만 완료 — 루브릭을 올리면 화면에 떠 있던 것만 재판정된다."""
     cand = json.loads((JOBFEED / "candidates.json").read_text())
-    known = {str(r[2]) for r in cand["rows"]} | set(cand["skipped"])
+    career_map = careers(JOBFEED)
+    reviews = cand.get("experience_reviews", {})
+    known = {str(r[2]) for r in cand["rows"]
+             if not needs_experience_review(career_map.get(str(r[2]), ""))
+             or reviews.get(str(r[2]), {}).get("experience_reviewed")} | set(cand["skipped"])
     prop_path = JOBFEED / PROPOSALS
     props = json.loads(prop_path.read_text()) if prop_path.exists() else {}
     known |= {pid for pid, p in props.items()
-              if p.get("exclude") or p.get("rubric_version") == RUBRIC_VERSION}
+              if p.get("exclude") or (p.get("rubric_version") == RUBRIC_VERSION
+                  and (p.get("experience_reviewed") or not needs_experience_review(p.get("career") or career_map.get(pid, ""))))}
     today = datetime.now(KST).date()
     bad = {_norm(r[1]) for r in cand["rows"] if r[4] and r[4][0] == "bad"}
     rep = JOBFEED / "기업평판.md"
@@ -147,7 +153,7 @@ def _company_posting(t: Target) -> str:
                          f"판정 대상: {t.title}. 여러 직무가 포함된 자료이므로 이 직무와 공통 요건만 "
                          "사용하고, 다른 직무의 필수·우대 요건을 적용하지 마세요.\n" +
                          company_jobs.pdf_text(pdf["url"]))
-            return text
+            return f"[경력 조건] {job.get('career') or '미확인'}\n{text}"
     raise ValueError(f"{t.id}: 저장된 공식 공고 본문 없음 — 수집을 먼저 실행하세요")
 
 
@@ -160,11 +166,14 @@ def fetch_requirements(t: Target) -> str:
     if t.src not in ("wanted", "jumpit"):
         return _company_posting(t)
     if t.src == "wanted":
-        detail = _get(f"https://www.wanted.co.kr/api/v4/jobs/{t.id}")["job"]["detail"]
+        job = _get(f"https://www.wanted.co.kr/api/v4/jobs/{t.id}")["job"]
+        detail = job["detail"]
+        career = career_label(job.get("annual_from"), job.get("annual_to"), job.get("is_newbie"))
         text = (detail.get("requirements") or "").strip()
         pref = (detail.get("preferred_points") or "").strip()
     else:
         r = _get(f"https://jumpit-api.saramin.co.kr/api/position/{t.id[1:]}")["result"]
+        career = career_label(r.get("minCareer"), r.get("maxCareer"))
         resp = "\n".join((r.get("responsibility") or "").splitlines()[:2])
         text = f"{(r.get('qualifications') or '').strip()}\n[주요업무 발췌] {resp}".strip()
         pref = (r.get("preferredRequirements") or "").strip()
@@ -172,7 +181,17 @@ def fetch_requirements(t: Target) -> str:
         raise RuntimeError(f"{t.id}: 자격요건 없음 — 공고 내려갔거나 API 변경")
     if pref:
         text += f"\n[우대사항] {pref}"
-    return text[:REQ_CAP]
+    if needs_experience_review(career):
+        if t.src == "wanted":
+            parts = {"소개": detail.get("intro"), "주요업무": detail.get("main_tasks"),
+                     "자격요건": detail.get("requirements"), "우대사항": pref,
+                     "혜택·복지": detail.get("benefits")}
+        else:
+            parts = {"주요업무": r.get("responsibility"), "자격요건": r.get("qualifications"),
+                     "우대사항": pref}
+        text = "\n\n".join(f"[{label}] {value}" for label, value in parts.items() if value)
+        return f"[경력 조건] {career}\n{text}"
+    return f"[경력 조건] {career}\n{text}"[:REQ_CAP]
 
 
 @activity.defn
@@ -220,6 +239,11 @@ def to_row(j: dict) -> list:
     return [j["title"], j["company"], rid, j["scores"], None, reason, [], None]
 
 
+def _proposal_record(j: dict) -> dict:
+    return {**{k: j[k] for k in PROP_FIELDS},
+            "experience_reviewed": j.get("experience_reviewed", False), "career": j.get("career", "")}
+
+
 @activity.defn
 def commit_rows(approved: list[dict], dry_run: bool = False) -> str:
     if not approved:
@@ -228,6 +252,7 @@ def commit_rows(approved: list[dict], dry_run: bool = False) -> str:
     if len(vers) != 1:
         # 루브릭이 섞인 배치 거부 — build.py의 배점 검사와 같은 층 (DESIGN)
         raise RuntimeError(f"루브릭 버전 혼재 {vers} — 배치 거부")
+    _check_eligibility(approved)
     path = JOBFEED / "candidates.json"
     cand = json.loads(path.read_text())
     have = {str(r[2]) for r in cand["rows"]}
@@ -236,6 +261,9 @@ def commit_rows(approved: list[dict], dry_run: bool = False) -> str:
         return f"dry-run: {len(rows)}건\n" + "\n".join(
             json.dumps(r, ensure_ascii=False) for r in rows)
     cand["rows"].extend(rows)
+    for j in approved:
+        if j.get("experience_reviewed"):
+            cand.setdefault("experience_reviews", {})[str(j["id"])] = _proposal_record(j)
     path.write_text(json.dumps(cand, ensure_ascii=False, indent=1))
     git = _commit_and_push(["jobfeed/candidates.json"],
                            f"job-scouter: 자동 등재 {len(rows)}건 (rubric {vers.pop()})")
@@ -271,11 +299,17 @@ def save_proposals(judged: list[dict]) -> int:
     path = JOBFEED / PROPOSALS
     props = json.loads(path.read_text()) if path.exists() else {}
     for j in judged:
-        rec = {k: j[k] for k in PROP_FIELDS}
+        rec = _proposal_record(j)
         rec["judged_at"] = date.today().isoformat()
         props[str(rec["id"])] = rec
 
     cand = json.loads((JOBFEED / "candidates.json").read_text())
+    listed = {str(r[2]) for r in cand["rows"]}
+    reviewed = {str(j["id"]): _proposal_record(j)
+                for j in judged if str(j["id"]) in listed and j.get("experience_reviewed")}
+    if reviewed:
+        cand.setdefault("experience_reviews", {}).update(reviewed)
+        (JOBFEED / "candidates.json").write_text(json.dumps(cand, ensure_ascii=False, indent=1))
     known = {str(r[2]) for r in cand["rows"]} | set(cand["skipped"])
     due_map, today = dues(), datetime.now(KST).date()
     props = {pid: rec for pid, rec in props.items()
@@ -284,6 +318,8 @@ def save_proposals(judged: list[dict]) -> int:
 
     n = sum(1 for rec in props.values() if not rec.get("exclude"))
     names = [n for n in ("jobs.jsonl", "new.md", PROPOSALS) if (JOBFEED / n).exists()]
+    if reviewed:
+        names.append("candidates.json")
     _commit_and_push([f"jobfeed/{n}" for n in names], f"job-scouter: 스캔 — proposals {n}건")
     return n
 
@@ -293,7 +329,19 @@ def load_proposals(ids: list[str]) -> list[dict]:
     """proposals.json에서 해당 id들의 판정 dict(commit_rows 입력 형식)를 돌려준다."""
     path = JOBFEED / PROPOSALS
     props = json.loads(path.read_text()) if path.exists() else {}
-    return [props[str(i)] for i in ids if str(i) in props]
+    selected = [props[str(i)] for i in ids if str(i) in props]
+    _check_eligibility(selected)
+    return selected
+
+
+def _check_eligibility(proposals: list[dict]) -> None:
+    career_map = careers(JOBFEED)
+    for proposal in proposals:
+        if proposal.get("exclude"):
+            raise ValueError(f"{proposal['id']}: 등재 불가 — {proposal.get('reason', '제외 판정')}")
+        if (needs_experience_review(proposal.get("career") or career_map.get(str(proposal["id"]), ""))
+                and not proposal.get("experience_reviewed")):
+            raise ValueError(f"{proposal['id']}: 7년 이상 경력 조건의 AI 검토가 필요합니다")
 
 
 @activity.defn
@@ -304,8 +352,10 @@ def listed_target(cid: str) -> dict:
     cand = json.loads((JOBFEED / "candidates.json").read_text())
     for r in cand["rows"]:
         if str(r[2]) == cid:
+            review = cand.get("experience_reviews", {}).get(cid, {})
+            _check_eligibility([{"id": cid, **review}])
             return {"id": cid, "company": r[1], "title": r[0],
-                    "scores": list(r[3]), "reason": r[5] or "",
+                    "scores": list(review.get("scores", r[3])), "reason": review.get("reason", r[5]) or "",
                     **job_reference(cid)}
     raise ValueError(f"candidates.json 등재 행에 {cid} 없음 — 등재된 공고만 초안을 만든다")
 

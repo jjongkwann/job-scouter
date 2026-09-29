@@ -58,7 +58,7 @@ def test_fetch_requirements_jumpit_plural_and_cap(monkeypatch):
                    "preferredRequirements": "Django 경험"}})
     t = Target(id="j555", company="새회사", title="E", src="jumpit", url="u")
     text = io_acts.fetch_requirements(t)
-    assert text.startswith("필수: 가")
+    assert text.startswith("[경력 조건] 경력\n필수: 가")
     assert len(text) <= io_acts.REQ_CAP
     assert "줄2" in text and "줄3" not in text  # responsibility는 첫 2줄만
     assert text.endswith("[우대사항] Django 경험")  # 우대는 필수 뒤에 라벨 붙여 — 제외 판단 참고용
@@ -75,6 +75,46 @@ def test_to_row_format():
     assert len(r) == 8 and r[2] == "j555" and r[4] is None and r[5]
     j["id"] = "365172"
     assert io_acts.to_row(j)[2] == 365172   # 원티드는 int — 기존 관례
+
+
+def test_experience_review_preserves_listed_history_and_blocks_stale_approval(tmp_path, monkeypatch):
+    _touch_jobfeed(tmp_path, monkeypatch)
+    jobs = [json.loads(line) for line in (tmp_path / "jobs.jsonl").read_text().splitlines()]
+    next(j for j in jobs if j["id"] == 222)["career"] = "8~15년"
+    (tmp_path / "jobs.jsonl").write_text("\n".join(json.dumps(j) for j in jobs))
+    before = json.loads((tmp_path / "candidates.json").read_text())
+    assert "222" in {t.id for t in io_acts.load_targets()}
+    stale = {"id": "222", "rubric_version": config.RUBRIC_VERSION}
+    with pytest.raises(ValueError, match="AI 검토"):
+        io_acts.commit_rows([stale], dry_run=True)
+    review = {**stale, "experience_reviewed": True, "exclude": True,
+              "company": "등재회사", "title": "포지션", "url": "u", "src": "wanted",
+              "scores": [0, 0, 0, 0, 0], "total": 0, "confidence": 1.0, "quotes": [],
+              "career": "8~15년", "reason": "필수 8년 조건 불충족"}
+    monkeypatch.setattr(io_acts, "_commit_and_push", lambda *a: "")
+    io_acts.save_proposals([review])
+    after = json.loads((tmp_path / "candidates.json").read_text())
+    assert before["rows"] == after["rows"]
+    assert after["experience_reviews"]["222"] == review
+    assert "222" not in {t.id for t in io_acts.load_targets()}
+    assert "222" not in json.loads((tmp_path / "proposals.json").read_text())
+    with pytest.raises(ValueError, match="등재 불가"):
+        io_acts.listed_target("222")
+    review.update(exclude=False, scores=[30, 18, 16, 20, 0], total=84, reason="동등 역량 인정")
+    io_acts.save_proposals([review])
+    assert io_acts.listed_target("222")["scores"] == review["scores"]
+    assert io_acts.listed_target("222")["reason"] == "동등 역량 인정"
+
+
+def test_seven_year_jd_is_read_in_full(monkeypatch):
+    monkeypatch.setattr(io_acts, "_get", lambda url: {"job": {
+        "annual_from": 7, "annual_to": 100, "detail": {
+            "intro": "회사 소개", "requirements": "필수 Python " + "가" * 3000,
+            "main_tasks": "업무 전문", "preferred_points": "동등 역량은 연차 무관"}}})
+    text = io_acts.fetch_requirements(Target("1", "회사", "개발", "wanted", "url"))
+    assert text.startswith("[경력 조건] 7년 이상\n")
+    assert "회사 소개" in text and "업무 전문" in text and text.endswith("동등 역량은 연차 무관")
+    assert len(text) > io_acts.REQ_CAP
 
 
 def test_commit_rows_rejects_mixed_rubric():
@@ -608,7 +648,7 @@ def test_company_posting_reaches_judge_and_draft_without_truncating(tmp_path, mo
     monkeypatch.setattr(io_acts, "JOBFEED", tmp_path)
     target = Target(id="daangn_12", company="당근", title="AI Platform", **config.job_reference("daangn_12"))
     assert io_acts.fetch_requirements(target).endswith("필수: Python LLM 운영")
-    assert io_acts.fetch_posting_full(target) == job["description"]
+    assert io_acts.fetch_posting_full(target) == "[경력 조건] 미확인\n" + job["description"]
     assert io_acts.listed_target("daangn_12")["url"] == target.url
     assert io_acts._expired("closed", date.today())
     job["pdfs"] = [{"title": "직무소개서", "url": "https://www.samsungcareers.com/download?x=1"}]

@@ -8,6 +8,7 @@ import difflib
 import json
 import re
 import subprocess
+import unicodedata
 from datetime import date, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -27,6 +28,7 @@ from jobscouter.config import (APPLICATIONS, CHAT_DIR, JOBFEED, PROPOSALS, Q_WF,
                                RESUME, RESUME_PROPOSALS, SID_RE, TEMPORAL, PublishParams,
                                _norm, git_path_at, resume_target)
 from jobscouter.workflow import ApplyResume, Draft, EndChat, Publish, ResumeChat, RevertFile
+from jobscouter.eligibility import careers, needs_experience_review
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -135,7 +137,11 @@ def _load_proposals() -> list[dict]:
     if not path.exists():
         return []
     # exclude 판정은 재판정 방지용으로만 남긴 것 — 화면에는 안 띄운다
-    return sorted((p for p in json.loads(path.read_text()).values() if not p.get("exclude")),
+    career_map = careers(JOBFEED)
+    return sorted(({**p, "career": p.get("career") or career_map.get(str(p["id"]), "미확인"),
+                    "experience_review_required": needs_experience_review(p.get("career") or career_map.get(str(p["id"]), ""))
+                        and not p.get("experience_reviewed", False)}
+                   for p in json.loads(path.read_text()).values() if not p.get("exclude")),
                   key=lambda p: -p.get("total", 0))
 
 
@@ -159,6 +165,27 @@ def _decorate(p: dict, rep: dict[str, str], due_map: dict[str, str], today: date
             "tier": "t1" if total >= 80 else "t2" if total >= 70 else "t3",
             "rail": rep.get(_norm(p.get("company", "")), "none"),
             "due": due, "due_cls": due_cls, "busy": str(p["id"]) in busy}
+
+
+def _group_proposals(proposals: list[dict]) -> list[dict]:
+    """회사·직무가 같은 다른 사이트 공고를 묶고, 원본 ID와 판정은 유지한다."""
+    buckets: dict[tuple[str, str], list[dict]] = {}
+    for p in proposals:
+        title = unicodedata.normalize("NFKC", p["title"]).casefold()
+        title = re.sub(r"\s+(?:상시\s*)?(?:채용|모집)\s*$", "", title)
+        # 직급·팀·기술명·연차는 남긴다. C++/C#도 서로 다른 직무다.
+        title = re.sub(r"[\s()[\]{}·/,_\-]+", "", title)
+        key = (_norm(p["company"]), title)
+        if not all(key):
+            key = (p["id"], "")
+        buckets.setdefault(key, []).append(p)
+    groups = []
+    for postings in buckets.values():
+        # 한 사이트에 같은 제목이 여러 번 있으면 별도 채용일 수 있어 합치지 않는다.
+        batches = [postings] if len({p["src"] for p in postings}) == len(postings) else [[p] for p in postings]
+        groups.extend({"id": batch[0]["id"], "company": batch[0]["company"],
+                       "title": batch[0]["title"], "postings": batch} for batch in batches)
+    return sorted(groups, key=lambda g: -max(p.get("total", 0) for p in g["postings"]))
 
 
 def load_chat(sid: str) -> dict | None:
@@ -402,17 +429,19 @@ async def dashboard():
     busy = set(pub["ids"]) | set(pub["reject_ids"]) if pub and pub["status"] == "RUNNING" else set()
     due_map, today = dues(), datetime.now(KST).date()
     proposals = [_decorate(p, rep, due_map, today, busy) for p in _load_proposals()]
+    review_pending = [p for p in proposals if p["experience_review_required"]]
+    groups = _group_proposals([p for p in proposals if not p["experience_review_required"]])
     unresearched = sorted({p["company"] for p in proposals if _norm(p["company"]) not in rep})
     runs, runs_error = [], None
     try:
         runs = await recent_runs()
     except Exception as e:
         runs_error = str(e)
-    return {"proposals": proposals, "unresearched": unresearched, "runs": runs,
+    return {"groups": groups, "review_pending": review_pending, "unresearched": unresearched, "runs": runs,
             "runs_error": runs_error, "publish": pub,
-            "stats": {"pending": len(proposals),
-                      "fit75": sum(1 for p in proposals if p.get("total", 0) >= 75),
-                      "gone": sum(1 for p in proposals if p["due_cls"] == "gone"),
+            "stats": {"pending": len(groups), "postings": len(proposals) - len(review_pending),
+                      "fit75": sum(any(p.get("total", 0) >= 75 for p in g["postings"]) for g in groups),
+                      "gone": sum(all(p["due_cls"] == "gone" for p in g["postings"]) for g in groups),
                       "unresearched": len(unresearched)}}
 
 
@@ -432,6 +461,9 @@ async def publish(body: PublishBody):
         raise HTTPException(400, f"거부 사유 없음: {', '.join(empty)}")
     rejects = [{"id": rid, "why": str(r.get("why", "")).strip()}
                for rid, r in zip(reject_ids, body.rejects)]
+    pending = [p["id"] for p in _load_proposals() if p["id"] in ids and p["experience_review_required"]]
+    if pending:
+        raise HTTPException(409, f"AI 경력 재검토 대기: {', '.join(pending)}")
     return {"workflow_id": await start_publish(ids, rejects)}
 
 
@@ -580,8 +612,11 @@ def applications_index():
 
 @app.post("/api/applications/draft")
 async def applications_draft(body: DraftBody):
-    if body.id not in {c["id"] for c in candidate_rows()}:
+    candidate = next((c for c in candidate_rows() if c["id"] == body.id), None)
+    if candidate is None:
         raise HTTPException(400, "등재되지 않은 공고 — 등재된 공고만 초안을 만든다")
+    if candidate["experience_review_required"] or candidate["experience_excluded"]:
+        raise HTTPException(409, "AI 경력 검토를 통과한 뒤 초안을 만들 수 있습니다")
     return {"workflow_id": await start_draft(body.id)}
 
 

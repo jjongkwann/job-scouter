@@ -88,9 +88,9 @@ def client(repo):
 
 def test_dashboard_json(client):
     d = client.get("/api/dashboard").json()
-    ids = [p["id"] for p in d["proposals"]]
+    ids = [p["id"] for p in [p for g in d["groups"] for p in g["postings"]]]
     assert ids == ["111", "333"]                      # total 내림차순 · exclude(444)는 빠진다
-    p = d["proposals"][0]
+    p = [p for g in d["groups"] for p in g["postings"]][0]
     assert p["cells"][0] == [30, "hi"] and p["cells"][4] == [-5, "pen"] and p["tier"] == "t2"
     assert p["due_cls"] == "gone" and p["rail"] == "none" and p["busy"] is False
     assert d["unresearched"] == ["테스트회사"] and d["stats"]["pending"] == 2   # 제외회사는 미조사에도 없다
@@ -102,9 +102,75 @@ def test_dashboard_marks_busy_rows_when_publish_running(client, monkeypatch):
                 "reject_ids": [], "error": ""}
     monkeypatch.setattr(api, "latest_publish", running)
     d = client.get("/api/dashboard").json()
-    assert [p["busy"] for p in d["proposals"]] == [True, False]
+    assert [p["busy"] for p in [p for g in d["groups"] for p in g["postings"]]] == [True, False]
     r = client.post("/api/publish", json={"ids": ["333"], "rejects": []})
     assert r.status_code == 409
+
+
+def test_dashboard_groups_cross_site_postings_without_merging_decisions(client, repo, monkeypatch):
+    path = repo / "jobfeed/proposals.json"
+    props = json.loads(path.read_text())
+    props["111"]["title"] = "소프트웨어 개발자"
+    props["j555"] = {**props["111"], "id": "j555", "src": "jumpit", "company": "(주)테스트회사",
+                     "title": "소프트웨어 개발자 채용", "url": "https://example.com/j555", "total": 77}
+    path.write_text(json.dumps(props))
+    d = client.get("/api/dashboard").json()
+    assert d["stats"]["pending"] == 2 and d["stats"]["postings"] == 3
+    assert d["stats"]["gone"] == 0   # 한 사이트만 마감되면 그룹 전체가 마감된 것은 아니다
+    assert [p["id"] for p in d["groups"][0]["postings"]] == ["111", "j555"]
+    assert [p["total"] for p in d["groups"][0]["postings"]] == [79, 77]
+    got = {}
+
+    async def start(ids, rejects):
+        got.update(ids=ids, rejects=rejects)
+        return "publish-group"
+
+    monkeypatch.setattr(api, "start_publish", start)
+    response = client.post("/api/publish", json={"ids": ["j555"], "rejects": [{"id": "111", "why": "마감"}]})
+    assert response.status_code == 200
+    assert got == {"ids": ["j555"], "rejects": [{"id": "111", "why": "마감"}]}
+
+
+def test_grouping_preserves_distinct_roles_levels_and_ambiguous_same_site_posts():
+    def p(id, title, src="wanted", company="회사"):
+        return {"id": id, "company": company, "title": title, "src": src, "total": 80}
+
+    rows = [p("1", "C++ 개발자"), p("j2", "C# 개발자", "jumpit"),
+            p("3", "AI Engineer"), p("j4", "Senior AI Engineer", "jumpit"),
+            p("5", "AI Engineer", company="다른 회사"), p("j6", "AI Engineer (7년 이상)", "jumpit")]
+    assert len(api._group_proposals(rows)) == 6
+    assert len(api._group_proposals([p("1", "개발자"), p("2", "개발자"), p("j3", "개발자", "jumpit")])) == 3
+
+
+def test_dashboard_holds_old_high_experience_until_ai_reviews_it(client, repo):
+    path = repo / "jobfeed/proposals.json"
+    props = json.loads(path.read_text())
+    props["111"]["career"] = "7년 이상"
+    props["333"]["career"] = "6~10년"
+    path.write_text(json.dumps(props))
+    d = client.get("/api/dashboard").json()
+    assert [p["id"] for p in d["review_pending"]] == ["111"]
+    assert [g["id"] for g in d["groups"]] == ["333"]
+    assert client.post("/api/publish", json={"ids": ["111"]}).status_code == 409
+    props["111"]["experience_reviewed"] = True
+    props["111"]["reason"] = "동등 역량 지원 가능 문구와 실제 관련 경험 확인"
+    path.write_text(json.dumps(props))
+    d = client.get("/api/dashboard").json()
+    assert not d["review_pending"] and len(d["groups"]) == 2
+    props["111"]["exclude"] = True
+    path.write_text(json.dumps(props))
+    assert len(client.get("/api/dashboard").json()["groups"]) == 1
+
+
+def test_pending_career_review_preserves_docs_but_blocks_new_drafts(client, repo):
+    path = repo / "jobfeed/jobs.jsonl"
+    with path.open("a") as f:
+        f.write(json.dumps({"src": "wanted", "id": 222, "career": "7년 이상"}) + "\n")
+    row = client.get("/api/candidates").json()["rows"][0]
+    assert row["experience_review_required"] and row["rank"] is None
+    assert client.post("/api/applications/draft", json={"id": "222"}).status_code == 409
+    data = client.get("/api/applications/job/222").json()
+    assert "1_맞춤_이력서.md" in data["docs"]
 
 
 def test_publish_starts_workflow(client, monkeypatch):
@@ -340,7 +406,7 @@ def test_safe_url_blocks_non_http(client):
     assert api._safe_url("https://www.wanted.co.kr/wd/1") == "https://www.wanted.co.kr/wd/1"
     assert api._safe_url(None) == "#"
     # 판정 결과의 url은 외부 API에서 온 값 — 응답에 넣기 전에 걸러진다
-    assert client.get("/api/dashboard").json()["proposals"][0]["url"] == "https://example.com/111"
+    assert client.get("/api/dashboard").json()["groups"][0]["postings"][0]["url"] == "https://example.com/111"
 
 
 def test_events_emits_only_changes(client, monkeypatch):

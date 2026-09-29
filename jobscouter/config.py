@@ -163,6 +163,8 @@ class Judgment:
     rubric_version: str = ""
     usage: dict = field(default_factory=dict)   # {in,out,cache_read,model,ms}
     cached: bool = False
+    experience_reviewed: bool = False  # 경력 메타데이터와 7년 이상 검토 정책을 반영한 판정
+    career: str = ""  # 검색 결과가 생략하는 경력 메타데이터를 상세 판정에서 보존
 
 # 지원서류 5종 — draft_application 출력·write_application allowlist (LLM 출력 파일명을 경로로 쓰지 않는다)
 APP_FILES = ["0_JD.md", "1_맞춤_이력서.md", "2_자기소개서.md",

@@ -6,6 +6,7 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from jobscouter.config import APP_FILES, APPLICATIONS, JOBFEED, _norm, job_cid, job_reference, settings
+from jobscouter.eligibility import careers, needs_experience_review
 
 KST = ZoneInfo("Asia/Seoul")
 MAX = [35, 25, 20, 20]  # 스택/도메인/레벨/역할 배점 상한
@@ -132,8 +133,15 @@ def candidate_rows(today: date | None = None) -> list[dict]:
     if not path.exists():
         return []
     today = today or datetime.now(KST).date()
+    career_map = careers(JOBFEED)
     out = []   # (row, _rec) — _rec은 순위 매기기용 지역 값, JSON에는 반올림한 rec만 실린다
-    for r in json.loads(path.read_text())["rows"]:
+    data = json.loads(path.read_text())
+    for original in data["rows"]:
+        r = list(original)
+        review = data.get("experience_reviews", {}).get(str(r[2]), {})
+        career = review.get("career") or career_map.get(str(r[2]), "미확인")
+        if review.get("experience_reviewed"):
+            r[3], r[5] = review["scores"], review["reason"]
         cid, total = str(r[2]), sum(r[3])
         addr = r[8] if len(r) > 8 else None   # 근무지는 refresh_due.py가 나중에 붙인다 — 새 행에는 없다
         zn, zlabel = zone(addr)
@@ -144,6 +152,10 @@ def candidate_rows(today: date | None = None) -> list[dict]:
         due, due_cls = cand_due(r[7], today)
         _rec = total * mul + ZONE_ADJ[zn]
         row = {
+            "career": career,
+            "experience_review_required": needs_experience_review(career) and not review.get("experience_reviewed", False),
+            "experience_excluded": bool(review.get("exclude")),
+            "experience_reason": review.get("reason", ""),
             "id": cid, "company": r[1], "title": r[0], "scores": list(r[3]) + [0] * (5 - len(r[3])),
             "total": total, "rep": rep, "rep_key": k, "rep_label": REP_LABEL.get(k, ""),
             "rep_note": r[5] or "", "tags": r[6] or [], "addr": addr or "",
@@ -154,6 +166,7 @@ def candidate_rows(today: date | None = None) -> list[dict]:
         }
         out.append((row, _rec))
     for i, (row, _) in enumerate(sorted((x for x in out if not x[0]["closed"]
+                                 and not x[0]["experience_review_required"] and not x[0]["experience_excluded"]
                                  and (x[0]["days_left"] is None or x[0]["days_left"] >= 0)),
                                 key=lambda x: -x[1]), 1):
         row["rank"] = i

@@ -21,6 +21,18 @@ from jobscouter.config import (APP_FILES, APP_EXAMPLE, APPLICATIONS, DATA, FACTB
 
 CODEX = os.environ.get("JOBSCOUTER_CODEX", "codex")
 _CAPS = [35, 25, 20, 20]
+_EXPERIENCE_POLICY = """
+## 사용자 경력 검토 정책 (2026-09-29)
+- 사실베이스의 확정 총경력은 그대로 사용하고 늘려 쓰지 않는다.
+- 최소 5~6년 요구는 사용자가 검토를 허용한 범위이므로 연차만으로 제외하지 않는다.
+- 최소 7년 이상은 [경력 조건]과 공고 전체를 읽고 AI가 판단한다. 숫자만으로 자동 제외하거나
+  예전 '3~8년=만점' 기준으로 통과시키지 않는다. 최소 필수연차인지, 단순 희망 수준인지,
+  동등 역량·경험으로 지원 가능한 예외가 실제로 명시돼 있는지 확인한다.
+- 필수 최소연차가 충족되지 않고 적용 가능한 예외 근거도 없으면 exclude=true로 판단한다.
+  유연한 조건이면 사실베이스의 관련 경험을 구체적으로 대조해 통과 근거를 쓴다.
+  경력 인정이 불명확하면 exclude=true, 사유에 '경력 조건 확인 필요'라고 명시한다.
+- 7년 이상 공고의 reason과 quotes에는 경력 원문, 필수/유연 판단, 사실베이스 대조 근거를 남긴다.
+"""
 _CACHE = DATA / "judgments.jsonl"
 # 생성 전용 실행: 호스트 설정·프로젝트 지침·외부 도구를 읽지 않는다.
 _LEAN = ["--ignore-user-config", "--ignore-rules", "--ephemeral",
@@ -100,7 +112,8 @@ def factbase_hash() -> str:
 
 
 def _cache_key(inp: JudgeInput, fb_hash: str) -> str:
-    return f"{inp.target.id}|{RUBRIC_VERSION}|{fb_hash}|{JUDGE_MODEL}|{REASONING_EFFORT}"
+    requirements_hash = hashlib.sha256(inp.requirements.encode()).hexdigest()[:12]
+    return f"{inp.target.id}|{RUBRIC_VERSION}|{fb_hash}|{JUDGE_MODEL}|{REASONING_EFFORT}|experience-v1|{requirements_hash}"
 
 
 def _load_cache() -> dict[str, dict]:
@@ -175,6 +188,8 @@ def _codex(prompt: str, system: str, schema: dict | None = None,
 
 @activity.defn
 def judge(inp: JudgeInput) -> Judgment:
+    header = inp.requirements.splitlines()[0] if inp.requirements else ""
+    career = header.removeprefix("[경력 조건] ") if header.startswith("[경력 조건] ") else ""
     fb = factbase_hash()
     key = _cache_key(inp, fb)
     hit = _load_cache().get(key)
@@ -182,7 +197,7 @@ def judge(inp: JudgeInput) -> Judgment:
         return Judgment(**hit["judgment"], cached=True)
 
     rubric = (PROMPTS / f"rubric_{RUBRIC_VERSION}.md").read_text()
-    system = rubric.replace("{factbase}", FACTBASE.read_text())  # 사이클 내 불변 → 캐시 적중
+    system = rubric.replace("{factbase}", FACTBASE.read_text()) + _EXPERIENCE_POLICY
     user = (f"회사: {inp.target.company}\n포지션: {inp.target.title}\n"
             f"출처: {inp.target.src} {inp.target.url}\n\n"
             f"자격요건 원문:\n{inp.requirements}")
@@ -199,7 +214,8 @@ def judge(inp: JudgeInput) -> Judgment:
         id=inp.target.id, company=inp.target.company, title=inp.target.title,
         scores=scores, total=sum(scores), exclude=bool(out["exclude"]),
         reason=out["reason"].split("</")[0].strip(), quotes=list(out["quotes"]),
-        confidence=float(out["confidence"]), rubric_version=RUBRIC_VERSION,
+        confidence=float(out["confidence"]), rubric_version=RUBRIC_VERSION, experience_reviewed=True,
+        career=career,
         usage={"in": u["input_tokens"],
                "out": u["output_tokens"],
                "cache_read": u["cached_input_tokens"],

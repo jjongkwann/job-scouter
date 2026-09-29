@@ -114,7 +114,8 @@ export default function CandidatesPage() {
   })
   const busy = remove.isPending || dashboard?.publish?.status === 'RUNNING'
   const rows = useMemo(() => data?.rows ?? [], [data])
-  const live = useMemo(() => applyFilters(sortRows(rows.filter((c) => !isDead(c)), sort), f, true), [rows, sort, f])
+  const review = useMemo(() => applyFilters(sortRows(rows.filter((c) => !isDead(c) && (c.experience_review_required || c.experience_excluded)), sort), f, false), [rows, sort, f])
+  const live = useMemo(() => applyFilters(sortRows(rows.filter((c) => !isDead(c) && !c.experience_review_required && !c.experience_excluded), sort), f, true), [rows, sort, f])
   const dead = useMemo(() => applyFilters(sortRows(rows.filter(isDead), sort), f, false), [rows, sort, f])
   const selected = rows.filter((c) => picked.includes(c.id))
   const selectCandidate = (id: string, checked: boolean) =>
@@ -150,7 +151,8 @@ export default function CandidatesPage() {
         [rows.length, '전체 공고'],
         [new Set(rows.map((c) => c.company)).size, '회사'],
         [n((c) => c.days_left !== null && c.days_left >= 0 && c.days_left <= 7), '마감 D-7 이내'],
-        [n((c) => c.total >= 80), '적합도 80+'],
+        [n((c) => c.total >= 80 && !c.experience_review_required && !c.experience_excluded), '적합도 80+'],
+        [n((c) => !isDead(c) && c.experience_review_required), 'AI 경력 재검토'],
         [n((c) => c.rep_key === 'good'), '평판 괜찮음'],
         [n((c) => c.rep_key === 'bad'), '평판 회피'],
         [n((c) => c.rep_key === 'none'), '평판 정보 없음'],
@@ -263,6 +265,14 @@ export default function CandidatesPage() {
         )}
       </div>
 
+      {review.length > 0 && (
+        <details className="mt-3.5 border-t border-[var(--line)]">
+          <summary className="cursor-pointer py-[11px] text-[12px] text-[var(--dim)]">경력 재검토·제외 공고 <b>{review.length}</b>건</summary>
+          <p className="mb-2 text-[12px] text-[var(--dim)]">7년 이상 조건의 기존 공고는 다음 스캔에서 AI가 다시 판정합니다. 기존 지원서류는 그대로 열 수 있습니다.</p>
+          {review.map((c) => <Row key={c.id} c={c} app={data?.apps[c.id]} busy={busy} picked={picked.includes(c.id)} onSelect={selectCandidate} />)}
+        </details>
+      )}
+
       {dead.length > 0 && (
         <details className="mt-3.5 border-t border-[var(--line)]">
           <summary className="cursor-pointer list-none py-[11px] text-[12px] text-[var(--dim)] hover:text-[var(--fg)]">
@@ -358,16 +368,20 @@ function Row({ c, app, busy, picked, onSelect }: {
         </div>
         <div className="mt-px text-[12px] text-[var(--dim)]">
           {c.company}
+          {' · '}{c.career}
           {' · '}
           <a href={jobplanetUrl(c.company)} target="_blank" rel="noopener" className="text-[var(--faint)] no-underline hover:underline hover:underline-offset-2">
             잡플래닛
           </a>
         </div>
+        {(c.experience_review_required || c.experience_excluded) && (
+          <div className="mt-1 text-[11px] text-[var(--warn)]">{c.experience_review_required ? 'AI 경력 재검토 대기' : `경력 검토 제외 · ${c.experience_reason}`}</div>
+        )}
       </div>
 
       <div className={`text-[15px] leading-[1.1] font-extrabold tabular ${REC_CLS(c.rec)}`}>
         <span className="hidden text-[11px] font-normal text-[var(--faint)] max-[1060px]:inline">추천도 </span>
-        {Math.round(c.rec)}
+        {c.experience_review_required || c.experience_excluded ? '—' : Math.round(c.rec)}
         <span className="mt-px block text-[10px] font-semibold text-[var(--dim)]">#{c.rank ?? '-'}</span>
       </div>
 
@@ -406,7 +420,7 @@ function Row({ c, app, busy, picked, onSelect }: {
               : 'border-dashed border-[var(--line)] text-[var(--faint)]'
           }`}
         >
-          {app ? `지원서류 ${app.n}종 →` : '초안 만들기 →'}
+          {app ? `지원서류 ${app.n}종 →` : c.experience_review_required || c.experience_excluded ? '검토 상태 보기 →' : '초안 만들기 →'}
         </Link>
         <div className="text-[11px] leading-[1.5]">
           {c.tags.filter((t) => TAGS[t]).length === 0 ? (

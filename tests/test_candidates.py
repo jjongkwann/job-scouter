@@ -85,6 +85,23 @@ def test_reputation_and_folders(repo):
     assert C.job_index()["222"]["slug"] == "test_co"
 
 
+def test_candidate_experience_review_keeps_row_and_documents(repo):
+    feed = repo / "jobfeed"
+    (feed / "jobs.jsonl").write_text(json.dumps({"src": "wanted", "id": 222, "career": "8~15년"}))
+    row = next(r for r in C.candidate_rows() if r["id"] == "222")
+    assert row["experience_review_required"] and row["rank"] is None
+    data = json.loads((feed / "candidates.json").read_text())
+    original = data["rows"]
+    data["experience_reviews"] = {"222": {"experience_reviewed": True, "exclude": False,
+        "scores": [30, 18, 16, 20, 0], "reason": "동등 역량 허용, 실제 경험 정합"}}
+    (feed / "candidates.json").write_text(json.dumps(data))
+    row = next(r for r in C.candidate_rows() if r["id"] == "222")
+    assert not row["experience_review_required"] and not row["experience_excluded"]
+    assert row["total"] == 84 and row["rank"] is not None
+    assert C.job_index()["222"]["slug"] == "test_co"
+    assert json.loads((feed / "candidates.json").read_text())["rows"] == original
+
+
 def test_job_index_prefers_original_folder_over_draft_slot(repo):
     """`a_1`·`a_1_draft`가 같은 공고를 가리키면 정렬상 앞인 원본 폴더가 이긴다."""
     apps = repo / "applications"

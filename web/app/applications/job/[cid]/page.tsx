@@ -68,6 +68,7 @@ export default function JobApplicationPage({ params }: { params: Promise<{ cid: 
     )
 
   const { candidate: c, folder, folders, others, docs, drafting } = data
+  const experienceBlocked = c.experience_review_required || c.experience_excluded
   const src = c.src === 'wanted' ? '원티드' : c.src === 'jumpit' ? '점핏' : c.src === 'remember' ? '리멤버' : '공식 채용'
   const status = c.closed ? '공고 마감' : folder ? '미지원' : '초안 없음'
   const extra = folder ? folder.files.filter((f) => !APP_FILES.includes(f)) : []
@@ -114,7 +115,7 @@ export default function JobApplicationPage({ params }: { params: Promise<{ cid: 
             </div>
           </div>
           <div className={`text-right text-[17px] leading-[1.1] font-extrabold tabular ${REC_CLS(c.rec)}`}>
-            {Math.round(c.rec)}
+            {experienceBlocked ? '—' : Math.round(c.rec)}
             <span className="mt-px block text-[10px] font-semibold text-[var(--dim)]">
               추천도{c.rank ? ` · #${c.rank}` : ''}
             </span>
@@ -157,6 +158,7 @@ export default function JobApplicationPage({ params }: { params: Promise<{ cid: 
           </div>
         </div>
 
+        {experienceBlocked && <p className="text-[12px] text-[var(--warn)]">{c.experience_review_required ? `경력 ${c.career} · AI 재검토 대기` : `경력 검토 제외 · ${c.experience_reason}`} — 기존 문서는 열람할 수 있으며 새 초안 생성은 보류됩니다.</p>}
         <div className="flex flex-wrap items-center gap-2 pt-[11px]">
           {folder && (
             <span className="mr-auto text-[11px] text-[var(--dim)]">
@@ -177,7 +179,7 @@ export default function JobApplicationPage({ params }: { params: Promise<{ cid: 
           <Button
             size="sm"
             variant={folder ? 'outline' : 'default'}
-            disabled={drafting || draft.isPending}
+            disabled={drafting || draft.isPending || experienceBlocked}
             onClick={() => draft.mutate()}
           >
             {folder ? '초안 다시 만들기' : '5종 초안 만들기'}

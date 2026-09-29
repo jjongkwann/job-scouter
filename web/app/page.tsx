@@ -29,6 +29,7 @@ const LEGEND: [string, string][] = [
 
 // 거부 사유 프리셋 — X를 고르면 첫 항목으로 미리 채워지고, datalist로도 제안된다
 const X_REASONS = ['적합도 낮음', '스택 불일치', '도메인 불일치', '레벨 불일치', '역할 불일치', '마감·내려감', '평판', '조건(연봉·근무지)']
+const SOURCES: Record<string, string> = { wanted: '원티드', jumpit: '점핏', remember: '리멤버' }
 
 type Decision = { d: 'o' } | { d: 'x'; why: string }
 
@@ -60,7 +61,7 @@ export default function Home() {
 
   const pub = data?.publish
   const busy = pub?.status === 'RUNNING'
-  const proposals = data?.proposals ?? []
+  const groups = data?.groups ?? []
   const picked = Object.keys(decisions).length
 
   const decide = (id: string, v: string[]) =>
@@ -81,6 +82,7 @@ export default function Home() {
       stats={[
         [data?.stats.pending ?? '–', '승인 대기'],
         [data?.stats.fit75 ?? '–', '적합도 75+'],
+        [data?.review_pending.length ?? '–', 'AI 경력 재검토'],
         [data?.stats.gone ?? '–', '마감 지남'],
         [data?.stats.unresearched ?? '–', '평판 미조사 회사'],
         ['09:07', '다음 DailyScan'],
@@ -139,18 +141,27 @@ export default function Home() {
               <Skeleton className="h-9 w-full" />
             </div>
           ))
-        ) : proposals.length === 0 ? (
+        ) : groups.length === 0 ? (
           <div className="p-8 text-center text-[13px] text-[var(--dim)]">대기 중인 후보 없음 — 다음 DailyScan은 매일 09:07</div>
         ) : (
-          proposals.map((p) => (
-            <Row
-              key={p.id}
-              p={p}
-              locked={busy}
-              decision={decisions[p.id]}
-              onDecide={(v) => decide(p.id, v)}
-              onWhy={(why) => setWhy(p.id, why)}
-            />
+          groups.map((group) => (
+            <section key={group.id} aria-label={`${group.company} ${group.title}`} className="border-b border-[var(--line)] last:border-b-0">
+              {group.postings.length > 1 && (
+                <div className="flex flex-wrap items-center gap-2 bg-[var(--neubg)] px-[14px] py-2 text-[12px]">
+                  <span className="font-semibold">{group.company} · 같은 공고 {group.postings.length}개 사이트</span>
+                  {group.postings.map((p) => (
+                    <a key={p.id} href={p.url} target="_blank" rel="noopener" className="text-[var(--accent)] underline underline-offset-2">
+                      {SOURCES[p.src] ?? '공식 채용'}
+                    </a>
+                  ))}
+                  <span className="text-[var(--dim)]">사이트별 조건을 확인하고 각각 선택하세요</span>
+                </div>
+              )}
+              {group.postings.map((p) => (
+                <Row key={p.id} p={p} locked={busy || submit.isPending}
+                  decision={decisions[p.id]} onDecide={(v) => decide(p.id, v)} onWhy={(why) => setWhy(p.id, why)} />
+              ))}
+            </section>
           ))
         )}
       </div>
@@ -159,6 +170,19 @@ export default function Home() {
           <option key={r} value={r} />
         ))}
       </datalist>
+
+      {!!data?.review_pending.length && (
+        <details className="my-3 rounded-[9px] border border-[var(--line)] px-[14px] py-3 text-[12px]">
+          <summary className="cursor-pointer font-semibold">AI 경력 재검토 대기 {data.review_pending.length}건</summary>
+          <p className="my-2 text-[var(--dim)]">7년 이상 조건을 포함해 다음 스캔에서 다시 판정합니다. 판정이 끝나면 승인할 수 있습니다.</p>
+          {data.review_pending.map((p) => (
+            <div key={p.id} className="py-1">
+              <a href={p.url} target="_blank" rel="noopener" className="text-[var(--accent)] hover:underline">{p.company} · {p.title}</a>
+              {' · '}{p.career}
+            </div>
+          ))}
+        </details>
+      )}
 
       <div className="mt-2.5 flex items-center gap-3 rounded-[9px] border border-[var(--line)] bg-[var(--row)] px-[14px] py-[11px] text-[12px] text-[var(--dim)]">
         {busy ? (
@@ -262,6 +286,8 @@ function Row({
         </div>
         <div className="mt-px text-[12px] text-[var(--dim)]">
           {p.company}
+          {' · '}{SOURCES[p.src] ?? '공식 채용'}
+          {' · '}{p.career}
           {' · '}
           <a href={jobplanetUrl(p.company)} target="_blank" rel="noopener" className="text-[var(--faint)] no-underline hover:underline hover:underline-offset-2">
             잡플래닛

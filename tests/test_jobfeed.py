@@ -34,6 +34,17 @@ JUMPIT = {"result": {"positions": [
 ]}}
 
 
+def test_career_metadata_does_not_lose_minimum_when_max_is_missing(monkeypatch):
+    jumpit = json.loads(json.dumps(JUMPIT))
+    jumpit["result"]["positions"][0].update(minCareer=7, maxCareer=None)
+    monkeypatch.setattr(jobfeed, "_get", lambda url: jumpit)
+    assert next(jobfeed._jumpit("AI"))["career"] == "7년 이상"
+    wanted = json.loads(json.dumps(WANTED))
+    wanted["positions"]["data"][0].update(annual_from=6, annual_to=100)
+    monkeypatch.setattr(jobfeed, "_get", lambda url: wanted)
+    assert next(jobfeed._wanted("AI"))["career"] == "6년 이상"
+
+
 def test_fetch_jobs_appends_new_and_tags_digest(repo, monkeypatch):
     monkeypatch.setattr(jobfeed, "_get", lambda url: WANTED if "wanted" in url else JUMPIT)
     out = jobfeed.fetch_jobs()

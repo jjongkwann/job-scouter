@@ -14,6 +14,7 @@ from temporalio import activity
 from jobscouter import company_jobs
 from jobscouter.config import JOBFEED, _norm, job_cid, job_reference, settings
 from jobscouter.io_acts import _HDR, _SSL, _expired  # io_acts는 jobfeed를 import하지 않는다
+from jobscouter.eligibility import career_label
 
 _WANTED_SEARCH = "https://www.wanted.co.kr/api/chaos/search/v1/results?"
 _JUMPIT_SEARCH = "https://jumpit-api.saramin.co.kr/api/positions?"
@@ -37,7 +38,7 @@ def _wanted(kw: str):
         yield {
             "src": "wanted", "id": p["id"], "title": p["position"],
             "company": p["company"]["name"], "loc": p["address"].get("location", ""),
-            "career": "신입" if p.get("is_newbie") else "경력", "stacks": [],
+            "career": career_label(p.get("annual_from"), p.get("annual_to"), p.get("is_newbie")), "stacks": [],
             "due": (p.get("due_time") or "상시")[:10],
             "url": f"https://www.wanted.co.kr/wd/{p['id']}", "kw": kw,
         }
@@ -49,7 +50,7 @@ def _jumpit(kw: str):
         yield {
             "src": "jumpit", "id": p["id"], "title": p["title"],
             "company": p["companyName"], "loc": ", ".join(p.get("locations") or []),
-            "career": f"{p['minCareer']}~{p['maxCareer']}년" if p.get("maxCareer") else "신입/무관",
+            "career": career_label(p.get("minCareer"), p.get("maxCareer")),
             # 점핏은 매칭된 스택을 <span>으로 감싸서 내려줌
             "stacks": [re.sub(r"</?span>", "", s) for s in p.get("techStacks") or []],
             "due": (p.get("closedAt") or "상시")[:10],

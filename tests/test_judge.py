@@ -58,7 +58,9 @@ def test_cache_roundtrip(tmp_path, monkeypatch):
     j2 = J.judge(inp)
     assert (j1.cached, j2.cached) == (False, True)
     assert len(called) == 1                       # 두 번째는 codex 안 감
-    assert called[0][1] == "루브릭\n사실"          # {factbase} 치환
+    assert called[0][1].startswith("루브릭\n사실")  # {factbase} 치환
+    assert "최소 5~6년" in called[0][1] and "최소 7년 이상" in called[0][1]
+    assert j1.experience_reviewed and j2.experience_reviewed
     assert j1.usage["in"] == 1000 and j1.usage["usd"] is None
     assert j1.usage["cache_read"] == 900
     assert j1.usage["model"] == "gpt-6-astra"
@@ -67,6 +69,9 @@ def test_cache_roundtrip(tmp_path, monkeypatch):
     assert json.loads(J._CACHE.read_text().splitlines()[0]) == old
     monkeypatch.setattr(J, "REASONING_EFFORT", "high")
     assert not J.judge(inp).cached
+    inp.requirements = "[경력 조건] 7년 이상\nPython 경험. 동등 역량 지원 가능"
+    assert not J.judge(inp).cached
+    assert not J.judge(inp).exclude  # 최소연차만으로 자동 제외하지 않는다.
 
 
 def _setup_app_env(tmp_path, monkeypatch):

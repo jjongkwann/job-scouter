@@ -8,14 +8,17 @@ export type Proposal = {
   id: string; company: string; title: string; url: string; src: string; scores: number[]; total: number
   reason: string; quotes: string[]; confidence: number; rubric_version: string; judged_at: string
   cells: [number | string, '' | 'hi' | 'lo' | 'pen'][]; tier: Tier; rail: Rail; due: string; due_cls: DueCls; busy: boolean
+  career: string; experience_review_required: boolean
 }
 
 export type PublishInfo = { id: string; status: string; start: string; ids: string[]; reject_ids: string[]; error: string }
 
 export type Dashboard = {
-  proposals: Proposal[]; unresearched: string[]; runs: { type: string; status: string; start: string }[]
+  groups: { id: string; company: string; title: string; postings: Proposal[] }[]
+  review_pending: Proposal[]
+  unresearched: string[]; runs: { type: string; status: string; start: string }[]
   runs_error: string | null; publish: PublishInfo | null
-  stats: { pending: number; fit75: number; gone: number; unresearched: number }
+  stats: { pending: number; postings: number; fit75: number; gone: number; unresearched: number }
 }
 
 export type Candidate = {
@@ -23,6 +26,7 @@ export type Candidate = {
   rep: [Rail, number, number | null, number | string, string] | null; rep_key: Rail; rep_label: string; rep_note: string
   tags: string[]; addr: string; zone: number; zone_label: string; due: string; due_cls: DueCls; days_left: number | null
   closed: boolean; rec: number; rank: number | null
+  career: string; experience_review_required: boolean; experience_excluded: boolean; experience_reason: string
 }
 
 export type Candidates = { rows: Candidate[]; apps: Record<string, { slug: string; n: number }>; errors: string[]; updated: string }
