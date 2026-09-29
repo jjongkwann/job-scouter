@@ -21,12 +21,12 @@ export default function SlugApplicationPage({ params }: { params: Promise<{ slug
   // 폴더가 공고에 이어져 있으면 공고 화면이 정본이다 — 히스토리에 이 주소를 남기지 않는다
   const cid = data?.linked_cid
   useEffect(() => {
-    if (cid) router.replace(`/applications/job/${encodeURIComponent(cid)}`)
-  }, [cid, router])
+    if (cid) router.replace(`/applications/job/${encodeURIComponent(cid)}?folder=${encodeURIComponent(slug)}`)
+  }, [cid, router, slug])
 
   if (error)
     return (
-      <Page title={slug}>
+      <Page title="연결되지 않은 초안" back={{ href: '/applications', label: '공고별 초안' }}>
         <Card className="rounded-[9px] border-[var(--rail-bad)] bg-[var(--badbg)] px-[14px] py-[10px] text-[12.5px] text-[var(--bad)]">
           {error instanceof ApiError ? error.detail : String(error)}
         </Card>
@@ -35,21 +35,21 @@ export default function SlugApplicationPage({ params }: { params: Promise<{ slug
 
   if (isPending || !data || cid)
     return (
-      <Page title={slug}>
+      <Page title="연결되지 않은 초안" back={{ href: '/applications', label: '공고별 초안' }}>
         <Skeleton className="h-64 w-full" />
       </Page>
     )
 
   return (
     <Page
-      title={slug}
+      title="연결되지 않은 초안"
+      back={{ href: '/applications', label: '공고별 초안' }}
       sub={
         <>
-          <code>applications/{slug}</code> · md {data.folder.files.length} · 후보목록의 공고와 연결되지 않았습니다 —
-          문서에 공고 링크를 적으면 이어집니다.
+          {slug} · 초안 {data.folder.docs.length}/5종 · 후보목록의 공고와 연결되지 않았습니다. 문서에 공고 원문 링크를 적으면 이어집니다.
         </>
       }
-      source={<code>{`applications/${slug}/*.md`}</code>}
+      source={`초안 폴더 ${slug}`}
     >
       <DocTabs docs={data.docs} empty="이 폴더에는 마크다운 문서가 없습니다." />
     </Page>

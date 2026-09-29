@@ -1,0 +1,13 @@
+{
+  "name": "job-scouter-slide-studio",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "open-slide dev --host 127.0.0.1 --port 5173 --no-skills-check",
+    "build": "open-slide build --out-dir ../data/application-slide-studio/dist"
+  },
+  "dependencies": {
+    "@open-slide/core": "2.0.1"
+  }
+}

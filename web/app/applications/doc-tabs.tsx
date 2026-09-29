@@ -8,6 +8,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 // jobscouter/config.py APP_FILES — Draft가 만드는 표준 5종. 없는 건 탭 대신 점선 배지로 자리만 보여 준다.
 export const APP_FILES = ['0_JD.md', '1_맞춤_이력서.md', '2_자기소개서.md', '3_면접지식맵.md', '4_포트폴리오_구성.md']
+const DOC_LABELS: Record<string, string> = {
+  '0_JD.md': '공고',
+  '1_맞춤_이력서.md': '맞춤 이력서',
+  '2_자기소개서.md': '자기소개서',
+  '3_면접지식맵.md': '면접 준비',
+  '4_포트폴리오_구성.md': '포트폴리오 구성',
+}
 
 export function DocTabs({ docs, empty }: { docs: Record<string, string>; empty: ReactNode }) {
   const files = Object.keys(docs)
@@ -21,16 +28,17 @@ export function DocTabs({ docs, empty }: { docs: Record<string, string>; empty: 
 
   return (
     <Tabs value={cur} onValueChange={(v) => setTab(String(v))}>
-      <div className="mb-2.5 flex flex-wrap items-center gap-1.5">
-        <span className="mr-1 text-[11px] text-[var(--dim)]">문서</span>
-        <TabsList variant="line" className="h-auto flex-wrap gap-1.5 p-0">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <span className="text-[12px] text-[var(--dim)]">초안 문서</span>
+        <TabsList variant="line" className="h-auto max-w-full flex-wrap justify-start gap-x-3 gap-y-2 p-0">
           {files.map((f) => (
             <TabsTrigger
               key={f}
               value={f}
-              className="h-auto rounded-full border border-[var(--line)] bg-[var(--row)] px-[11px] py-[3px] text-[12px] font-normal hover:border-[var(--dim)] data-active:border-[var(--fg)] data-active:bg-[var(--fg)] data-active:text-white"
+              title={f}
+              className="min-h-11 flex-none rounded-none px-1 py-2 text-[13px] font-medium"
             >
-              {f}
+              {DOC_LABELS[f] ?? f}
             </TabsTrigger>
           ))}
         </TabsList>
@@ -38,9 +46,10 @@ export function DocTabs({ docs, empty }: { docs: Record<string, string>; empty: 
           <Badge
             key={f}
             variant="outline"
-            className="rounded-full border-dashed px-[11px] py-[3px] text-[11px] font-normal text-[var(--faint)]"
+            title={f}
+            className="rounded-md border-dashed px-2 py-1 text-[12px] font-normal text-[var(--dim)]"
           >
-            {f} 없음
+            {DOC_LABELS[f]} 없음
           </Badge>
         ))}
       </div>

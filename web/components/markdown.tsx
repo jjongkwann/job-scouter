@@ -14,7 +14,7 @@ function Anchor({ href, children, ...props }: AnchorHTMLAttributes<HTMLAnchorEle
 export function Markdown({ text }: { text: string }) {
   return (
     <div className="doc">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: Anchor }}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: Anchor, h1: ({ children }) => <h2>{children}</h2>, h2: ({ children }) => <h3>{children}</h3>, h3: ({ children }) => <h4>{children}</h4> }}>
         {text}
       </ReactMarkdown>
     </div>

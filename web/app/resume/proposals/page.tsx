@@ -1,6 +1,5 @@
 'use client'
 import { useState } from 'react'
-import Link from 'next/link'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
@@ -17,8 +16,6 @@ const KIND: Record<string, string> = {
   remove: 'bg-[var(--badbg)] text-[var(--bad)]',
   삭제: 'bg-[var(--badbg)] text-[var(--bad)]',
 }
-const ROW =
-  'grid grid-cols-1 items-center gap-2.5 px-3.5 py-2.5 min-[1060px]:grid-cols-[150px_170px_64px_minmax(300px,1.5fr)_minmax(220px,1fr)_56px]'
 
 export default function ResumeProposalsPage() {
   const qc = useQueryClient()
@@ -41,19 +38,15 @@ export default function ResumeProposalsPage() {
   return (
     <Page
       title="이력서 갱신 제안"
-      sub={
-        <>
-          매주 월요일 <b className="text-[var(--fg)]">ResumeSync</b>가 PKB(경력·소개 문서)와 사실베이스를 대조해 차이만
-          제안합니다. PKB가 지난주와 같으면 제안을 만들지 않습니다(해시 게이트).{' '}
-          <Link href="/resume">이력서 보기로 돌아가기</Link>
-        </>
-      }
+      back={{ href: "/resume", label: "공통 이력서" }}
+      sub="경력 자료와 사실베이스의 차이를 확인하세요. 선택한 제안만 사실베이스에 반영합니다."
       stats={[
-        [items.length, '대기 제안'],
-        ['월 08:00', 'ResumeSync'],
+        [q.data ? items.length : '–', '대기 제안'],
+        ['월 08:00', '자동 확인'],
       ]}
       source={<code>jobfeed/resume_proposals.json</code>}
     >
+      {apply.error && <div className="notice text-[var(--bad)]" role="alert">제안을 반영하지 못했습니다: {apply.error.message}</div>}
       {q.isPending && <Skeleton className="h-40 w-full" />}
       {q.error && (
         <Card className="mb-3 rounded-lg border border-[var(--rail-bad)] bg-[var(--badbg)] px-3.5 py-3 text-[12.5px] text-[var(--bad)] ring-0">
@@ -63,66 +56,32 @@ export default function ResumeProposalsPage() {
       {q.data &&
         (items.length ? (
           <Card className="mb-3 gap-0 rounded-lg bg-[var(--row)] py-0 ring-[var(--line)]">
-            <div className={`${ROW} hidden border-b border-[var(--line)] bg-[var(--bg)] text-[11px] text-[var(--dim)] min-[1060px]:grid`}>
-              <div>대상</div>
-              <div>섹션</div>
-              <div>종류</div>
-              <div>현재 → 제안</div>
-              <div>근거 (PKB)</div>
-              <div className="text-center">반영</div>
-            </div>
             {items.map((it) => (
-              <div key={it.id} className={`${ROW} border-b border-[var(--line)] last:border-b-0 hover:bg-[var(--hov)]`}>
-                <div>
-                  <Badge variant="outline" className="border-0 bg-[var(--neubg)] text-[var(--neu)]">
-                    {it.target}
-                  </Badge>
+              <article key={it.id} className="min-w-0 border-b border-[var(--line)] p-5 last:border-b-0">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-2"><h2 className="text-[15px] font-semibold">{it.section}</h2><Badge variant="outline">{it.target}</Badge><Badge variant="secondary" className={KIND[it.kind] ?? 'bg-[var(--warnbg)] text-[var(--warn)]'}>{it.kind}</Badge></div>
+                  <label className="inline-flex min-h-11 items-center gap-2 text-[13px]"><Checkbox checked={picked.includes(it.id)} disabled={apply.isPending} onCheckedChange={(on) => setPicked((p) => on ? [...p, it.id] : p.filter((x) => x !== it.id))} aria-label={`${it.section} 제안 반영`} />반영할 내용 선택</label>
                 </div>
-                <div className="text-[12px]">{it.section}</div>
-                <div>
-                  <Badge
-                    variant="outline"
-                    className={`border-0 ${KIND[it.kind] ?? 'bg-[var(--warnbg)] text-[var(--warn)]'}`}
-                  >
-                    {it.kind}
-                  </Badge>
+                <div className="grid min-w-0 gap-5 md:grid-cols-2">
+                  <div className="min-w-0 break-words text-[14px]">{it.current && <p className="mb-2 text-[var(--dim)]"><span className="block text-xs">현재 내용</span>{it.current}</p>}<p><span className="mb-1 block text-xs text-[var(--dim)]">제안 내용</span>{it.proposed}</p></div>
+                  <p className="min-w-0 break-words text-[14px]"><span className="mb-1 block text-xs text-[var(--dim)]">경력 자료 근거</span>{it.evidence}</p>
                 </div>
-                <div className="text-[12.5px] leading-[1.5]">
-                  {it.current && (
-                    <>
-                      <del className="text-[var(--faint)]">{it.current}</del>
-                      <br />
-                    </>
-                  )}
-                  → {it.proposed}
-                </div>
-                <div className="text-[11.5px] leading-[1.45] text-[var(--dim)]">{it.evidence}</div>
-                <div className="min-[1060px]:text-center">
-                  <Checkbox
-                    checked={picked.includes(it.id)}
-                    onCheckedChange={(on) =>
-                      setPicked((p) => (on ? [...p, it.id] : p.filter((x) => x !== it.id)))
-                    }
-                    aria-label={`${it.section} 제안 반영`}
-                    className="inline-flex"
-                  />
-                </div>
-              </div>
+              </article>
             ))}
           </Card>
         ) : (
           <div className="mb-3 rounded-[9px] border border-dashed border-[var(--line)] bg-[var(--row)] p-8 text-center text-[13px] text-[var(--dim)]">
-            대기 중인 제안 없음 — ResumeSync는 매주 월 08:00, PKB가 그대로면 제안을 만들지 않습니다
+            대기 중인 갱신 제안이 없습니다. 경력 자료에 변화가 있으면 제안이 표시됩니다.
           </div>
         ))}
-      <div className="mt-2.5 flex items-center gap-3 rounded-[9px] border border-[var(--line)] bg-[var(--row)] px-3.5 py-2.5 text-[12px] text-[var(--dim)]">
-        <span>체크한 제안만 ApplyResume이 사실베이스에 반영하고 검색 색인을 다시 만든 뒤 커밋합니다</span>
+      <div className="mt-2.5 flex flex-wrap items-center gap-3 rounded-[9px] border border-[var(--line)] bg-[var(--row)] px-3.5 py-2.5 text-[12px] text-[var(--dim)]">
+        <span>선택한 제안만 사실베이스에 반영하고 변경 이력을 남깁니다.</span>
         <Button
           className="ml-auto rounded-full text-[12px]"
           disabled={!picked.length || apply.isPending}
           onClick={() => apply.mutate()}
         >
-          반영
+          {picked.length}건 사실베이스에 반영
         </Button>
       </div>
     </Page>

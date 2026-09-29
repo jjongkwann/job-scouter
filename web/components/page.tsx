@@ -1,37 +1,32 @@
 import type { ReactNode } from 'react'
-import { Card, CardContent } from '@/components/ui/card'
+import Link from 'next/link'
+import { ArrowLeft } from 'lucide-react'
 
-export function Page({
-  title,
-  sub,
-  source,
-  stats,
-  children,
-}: {
+export function Page({ title, sub, source, stats, back, actions, children }: {
   title: string
   sub?: ReactNode
   source?: ReactNode
   stats?: [ReactNode, string][]
+  back?: { href: string; label: string }
+  actions?: ReactNode
   children: ReactNode
 }) {
+  const statItems = (items: [ReactNode, string][]) => items.map(([value, label]) => (
+    <div key={label} className="stat"><span className="stat-value tabular">{value}</span><span>{label}</span></div>
+  ))
   return (
-    <div>
-      <h1 className="text-[21px] font-semibold m-0 mb-1">{title}</h1>
-      {sub && <p className="sub m-0 mb-4 max-w-[78ch] text-[13px] text-[var(--dim)]">{sub}</p>}
-      {stats && stats.length > 0 && (
-        <Card className="mb-4 py-3">
-          <CardContent className="flex flex-wrap gap-5 px-4">
-            {stats.map(([value, label], i) => (
-              <div key={i} className="flex flex-col gap-0.5">
-                <span className="text-[19px] font-bold tabular leading-none">{value}</span>
-                <span className="text-[11px] text-[var(--dim)]">{label}</span>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      )}
+    <div className="page">
+      {back && <Link href={back.href} className="back-link"><ArrowLeft size={15} aria-hidden="true" />{back.label}</Link>}
+      <header className="page-header">
+        <div><h1>{title}</h1>{sub && <p className="page-description">{sub}</p>}</div>
+        {actions && <div className="page-actions">{actions}</div>}
+      </header>
+      {!!stats?.length && <div className="page-stats">
+        <div className="stats-grid">{statItems(stats.slice(0, 4))}</div>
+        {stats.length > 4 && <details className="more-stats"><summary>추가 현황 {stats.length - 4}개</summary><div className="stats-grid">{statItems(stats.slice(4))}</div></details>}
+      </div>}
       {children}
-      {source && <footer className="mt-6 text-[11px] text-[var(--faint)]">원본: {source}</footer>}
+      {source && <footer className="source-note"><details><summary>출처·기록 정보</summary><div>{source}</div></details></footer>}
     </div>
   )
 }

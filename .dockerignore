@@ -5,3 +5,5 @@ data/
 __pycache__/
 deploy/.env
 web/
+slide-studio/
+면접 질문/

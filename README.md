@@ -165,6 +165,7 @@ cd web && API_URL=http://localhost:8091 npm run dev    # 터미널 4 — 화면 
 |---|---|
 | `/` | `proposals.json` 대시보드(점수·사유·인용) + O/X 판정 → `Publish` 시작 → 완료 후 `Drafts`(승인건 순차 초안, 실패 시 FAILED로 표시). 평판 미조사 회사·최근 실행 상태 |
 | `/candidates` | 후보 목록 — 필터(평판·태그·적합도·마감·통근)·정렬은 브라우저에서, 추천도·순위는 서버 값. 행마다 「지원서류 n종 →」/「초안 만들기 →」 |
+| `/offers` | 원티드 받은 제안 — 답변 대기와 수락·거절·만료 이력, 제안 원문·응답 기한, 기존 공고 평가와 기업 조사 보고서. 원티드 답변 링크와 평가·조사 요청 복사 |
 | `/reports`, `/reports/{name}` | 사이클 보고서 목록·렌더 |
 | `/resume/proposals` | 이력서 갱신 제안 승인 → ApplyResume |
 | `/resume` | 이력서 정본 `이력서.md` 한 문서 렌더. 「대화로 고치기」·「이력」 링크, 진행 중 대화 목록 |
@@ -176,6 +177,31 @@ cd web && API_URL=http://localhost:8091 npm run dev    # 터미널 4 — 화면 
 | `/docs`, `/docs/{path}` | `references/` 문서 렌더(하위 디렉토리 포함) |
 
 워커가 꺼져 있어도 워크플로는 서버에서 대기하고, 워커를 켜면 이어진다.
+
+### 원티드 받은 제안
+
+원티드에 로그인한 Mac Chrome을 열고 실행한다. Chrome의 기본 페이지 저장 기능으로
+원티드 목록과 상세를 읽으므로 Apple Events JavaScript 허용은 필요 없다.
+
+```bash
+uv run python -m scripts.sync_wanted_offers --jobfeed /path/to/resume-private/jobfeed
+```
+
+`jobfeed/wanted_offers.json`에 최초 OFFER 이벤트 ID로 병합한다. 목록의 position ID와
+상세의 공고 ID가 다를 수 있어 연결에는 상세 `proposal.job_id`를 사용한다.
+수락·거절 뒤에도 최초 ID와 수신일을 유지하고, 목록에서 사라진 과거 제안도 보존한다.
+페이지 중복은 제거하며 목록·상세 수집에 실패하면 기존 파일을 변경하지 않는다.
+이 명령은 로컬 파일만 쓰고 원티드 답변이나 git push를 실행하지 않는다.
+데이터 repo가 `.gitignore` 허용 목록을 쓰면 `!/jobfeed/wanted_offers.json`을 추가한다.
+
+`/offers`는 기본으로 답변 대기를 표시한다. 기존 평가·후보는 공고 ID와 회사명을 대조해
+연결하고, 제외 사유도 표시한다. 수신 이력이므로 후보 삭제에 따라 지우지 않는다.
+회사별 평판·사실베이스 대조는 기존 대화형 조사 방식으로 진행한다. 화면의
+「평가·조사 요청 복사」를 대화에 붙여넣으면 조사 요청을 전달할 수 있다.
+결과는 `jobfeed/reports/wanted_offer_{제안ID}.md`에 기록한다(제목 다음 첫 문단은 판단 요약).
+보고서는 `/offers`와 `/reports`에 표시된다. 서버에 표시하려면 코드 배포와 데이터 동기화가
+별도로 필요하다. 미평가 점수나 미조사 평판은 추정하여 채우지 않는다.
+
 판정 캐시는 `data/judgments.jsonl` — 루브릭을 올리면 `rubric_v2.md` 추가 후
 `config.RUBRIC_VERSION` 변경, 전 건이 자동 재판정 대상이 된다.
 

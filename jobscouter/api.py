@@ -1,4 +1,4 @@
-"""JSON API(:8091) — 데이터 repo를 읽고(마운트는 :ro) Temporal 워크플로를 시작한다. HTML 없음.
+"""API(:8091) — 읽기 전용 데이터·지원서류·슬라이드를 제공하고 Temporal 워크플로를 시작한다.
 브라우저는 web(Next.js)만 보고, web의 라우트 핸들러가 여기로 넘긴다.
 
 파일은 쓰지 않는다 — 쓰기는 전부 워크플로 시작. Temporal 접근은 module-level 함수로 모아
@@ -28,9 +28,14 @@ from jobscouter.config import (APPLICATIONS, CHAT_DIR, JOBFEED, PROPOSALS, Q_WF,
                                RESUME, RESUME_PROPOSALS, SID_RE, TEMPORAL, PublishParams,
                                _norm, git_path_at, resume_target)
 from jobscouter.workflow import ApplyResume, Draft, EndChat, Publish, ResumeChat, RevertFile
+from jobscouter import offers
+from jobscouter.application_files import router as application_files_router
+from jobscouter.application_slides import router as application_slides_router
 from jobscouter.eligibility import careers, needs_experience_review
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+app.include_router(application_files_router)
+app.include_router(application_slides_router)
 
 # 무인증 LAN API의 브라우저 경유 공격 차단 — 이 레포 데이터에는 이력서·연락처가 있다.
 # Host 허용: IPv4 리터럴 · localhost · 점 없는 LAN 이름(docker 내부 이름 api 포함) · *.local
@@ -445,6 +450,55 @@ async def dashboard():
                       "unresearched": len(unresearched)}}
 
 
+@app.get("/api/offers")
+def received_offers():
+    data = offers.load(JOBFEED)
+    prop_path = JOBFEED / PROPOSALS
+    props = json.loads(prop_path.read_text()) if prop_path.exists() else {}
+    cand_path = JOBFEED / "candidates.json"
+    cand = json.loads(cand_path.read_text()) if cand_path.exists() else {"rows": [], "skipped": {}}
+    rows = {str(row[2]): row for row in cand["rows"]}
+    rep, due_map, today = reputation(), dues(), datetime.now(KST).date()
+    items = []
+    for raw in data["items"]:
+        item = offers.Offer.model_validate(raw).model_dump()
+        cid = item["job_id"]
+        row, judgment = rows.get(cid), props.get(cid)
+        if row and _norm(row[1]) != _norm(item["company"]):
+            row = None
+        if judgment and _norm(judgment["company"]) != _norm(item["company"]):
+            judgment = None
+        state, reason = "unassessed", ""
+        skipped = cand["skipped"].get(cid)
+        if skipped and _norm(skipped[0]) == _norm(item["company"]):
+            state, reason = "skipped", skipped[2]
+        elif judgment and judgment.get("exclude"):
+            state, reason = "excluded", judgment.get("reason", "")
+        elif row:
+            state, reason = "listed", row[5] or ""
+        elif judgment:
+            state, reason = "pending", judgment.get("reason", "")
+        if rep.get(_norm(item["company"])) == "bad":
+            state, reason = "excluded", reason or "기업평판의 회피·사용자 지정 제외 대상"
+        report_name = f"wanted_offer_{item['id']}"
+        report_path = JOBFEED / "reports" / f"{report_name}.md"
+        review = report_path.read_text() if report_path.exists() else ""
+        if review and state == "unassessed":
+            state = "reviewed"
+        active = item["status_code"] == "OFFER" and (
+            not item["expires_at"] or item["expires_at"][:10] >= today.isoformat())
+        items.append({**item, "state": state, "reason": reason,
+                      "active": active,
+                      "url": offers.SOURCE_URL,
+                      "job_url": f"https://www.wanted.co.kr/wd/{cid}" if cid else "",
+                      "rail": rep.get(_norm(item["company"]), "none"),
+                      "assessment": _decorate(judgment, rep, due_map, today, set()) if judgment else None,
+                      "listed_scores": row[3] if row else None,
+                      "review": review, "report_name": report_name if review else ""})
+    items.sort(key=lambda item: (item["active"], int(item["id"])), reverse=True)
+    return {"items": items, "collected_at": data["collected_at"], "source_url": offers.SOURCE_URL}
+
+
 @app.post("/api/publish")
 async def publish(body: PublishBody):
     pub = await _latest_publish_safe()
@@ -479,12 +533,32 @@ def candidates():
 @app.get("/api/reports")
 def reports_index():
     d = JOBFEED / "reports"
-    names = sorted((p.stem for p in d.glob("*.md")), reverse=True) if d.exists() else []
     out = []
-    for n in names:
-        day, _, kind = n.partition("_")
-        out.append({"date": day, "kind": kind or "-", "name": n})
-    return out
+    for path in d.glob("*.md") if d.exists() else []:
+        name = path.stem
+        match = re.fullmatch(r"(\d{4}-\d{2}-\d{2})_(.+)", name)
+        day, suffix = None, match[2] if match else name
+        if match:
+            try:
+                day = date.fromisoformat(match[1]).isoformat()
+            except ValueError:
+                pass
+        if name.startswith("wanted_interview_"):
+            kind = "면접 준비"
+        elif name.startswith("wanted_offer_") or suffix == "제안조사":
+            kind = "받은 제안 조사"
+        elif name.startswith("remember_") or suffix in ("당근_LGCNS_공고검토", "삼성_신입공채_조사"):
+            kind = "공고 조사"
+        elif suffix == "자동사이클":
+            kind = "자동 사이클"
+        elif suffix == "매칭조사":
+            kind = "매칭 조사"
+        else:
+            kind = "기타 보고서"
+        heading = re.search(r"(?m)^#{1,6}\s+(.+?)\s*$", path.read_text())
+        out.append({"date": day, "kind": kind, "name": name,
+                    "title": heading[1] if heading else name})
+    return sorted(out, key=lambda item: (item["date"] or "", item["name"]), reverse=True)
 
 
 @app.get("/api/reports/{name}")

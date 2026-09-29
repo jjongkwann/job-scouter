@@ -13,6 +13,15 @@ export type Proposal = {
 
 export type PublishInfo = { id: string; status: string; start: string; ids: string[]; reject_ids: string[]; error: string }
 
+export type ReceivedOffer = {
+  id: string; company: string; title: string; job_id: string; received_at: string; status: string; message: string
+  company_id: string; status_code: string; status_at: string; expires_at: string; offer_type: string; offer_mode: string; active: boolean
+  url: string; job_url: string; rail: Rail; reason: string
+  state: 'unassessed' | 'skipped' | 'excluded' | 'listed' | 'pending' | 'reviewed'
+  assessment: Proposal | null; listed_scores: number[] | null; review: string; report_name: string
+}
+export type ReceivedOffers = { items: ReceivedOffer[]; collected_at: string; source_url: string }
+
 export type Dashboard = {
   groups: { id: string; company: string; title: string; postings: Proposal[] }[]
   review_pending: Proposal[]
@@ -31,7 +40,7 @@ export type Candidate = {
 
 export type Candidates = { rows: Candidate[]; apps: Record<string, { slug: string; n: number }>; errors: string[]; updated: string }
 
-export type ReportItem = { date: string; kind: string; name: string }
+export type ReportItem = { date: string | null; kind: string; name: string; title: string }
 export type Report = { name: string; markdown: string }
 
 export type Resume = { markdown: string; pending: number; chats: { sid: string; target: string; n: number }[] }

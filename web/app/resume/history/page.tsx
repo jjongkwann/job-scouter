@@ -38,18 +38,14 @@ function HistoryView() {
   const commits = log.data?.commits ?? []
   return (
     <Page
-      title={`수정 이력 — ${key}`}
-      sub={
-        <>
-          <code>{key}</code>의 git 커밋 이력입니다. 되돌리기는 과거 내용을 새 커밋으로 다시 올릴 뿐 히스토리는 지우지
-          않으므로, 되돌린 것도 다시 되돌릴 수 있습니다. <Link href="/resume">이력서 보기로 돌아가기</Link>
-        </>
-      }
+      title="이력서 수정 이력"
+      back={{ href: "/resume", label: "공통 이력서" }}
+      sub="변경 내용을 확인하고 이전 버전으로 되돌릴 수 있습니다. 되돌린 기록도 보존됩니다."
     >
-      <div className="grid grid-cols-1 items-start gap-4 min-[1060px]:grid-cols-2">
+      <div className="grid grid-cols-1 items-start gap-4 min-[1280px]:grid-cols-2">
         <div>
           <h2 className="mt-0 mb-2 text-[14px] font-semibold tracking-[-0.1px]">
-            커밋 이력
+            수정 기록
             <span className="ml-1.5 text-[12px] font-normal text-[var(--dim)]">{commits.length}</span>
           </h2>
           {log.isPending && <Skeleton className="h-40 w-full" />}
@@ -71,9 +67,9 @@ function HistoryView() {
                     <div className="flex-[1_1_200px] text-[12.5px]">{c.subject}</div>
                     <Link
                       href={`/resume/history?key=${encodeURIComponent(key)}&sha=${c.sha}`}
-                      className="inline-block rounded-full border border-[var(--line)] px-3 py-1 text-[12px] text-[var(--fg)] no-underline hover:border-[var(--dim)]"
+                      className="page-link"
                     >
-                      diff 보기
+                      변경 내용 보기
                     </Link>
                     <Button
                       variant="outline"
@@ -89,16 +85,16 @@ function HistoryView() {
               </Card>
             ) : (
               <div className="mb-3 rounded-[9px] border border-dashed border-[var(--line)] bg-[var(--row)] p-8 text-center text-[13px] text-[var(--dim)]">
-                커밋 이력 없음
+                수정 기록 없음
               </div>
             ))}
         </div>
 
         <Card className="mb-3 gap-2 rounded-lg bg-[var(--row)] px-3.5 py-3 text-[12px] ring-[var(--line)]">
-          <h3 className="m-0 text-[11px] font-semibold text-[var(--dim)]">diff{sha ? ` · ${sha}` : ''}</h3>
-          {!sha && <p className="m-0 text-[var(--dim)]">왼쪽에서 「diff 보기」를 눌러 확인</p>}
+          <h2 className="m-0 text-[13px] font-semibold text-[var(--dim)]">변경 내용{sha ? ` · ${sha}` : ''}</h2>
+          {!sha && <p className="m-0 text-[var(--dim)]">수정 기록에서 「변경 내용 보기」를 눌러 확인하세요.</p>}
           {sha && diff.isPending && <Skeleton className="h-40 w-full" />}
-          {sha && diff.error && <p className="m-0 text-[var(--bad)]">diff를 불러오지 못했습니다 — {diff.error.message}</p>}
+          {sha && diff.error && <p className="m-0 text-[var(--bad)]">변경 내용을 불러오지 못했습니다 — {diff.error.message}</p>}
           {sha && diff.data && <Diff diff={diff.data.diff} />}
         </Card>
       </div>

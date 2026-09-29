@@ -2,7 +2,6 @@
 import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
 import { Badge } from '@/components/ui/badge'
-import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Page } from '@/components/page'
 import { get, type ReportItem } from '@/lib/api'
@@ -12,53 +11,40 @@ export default function ReportsPage() {
   const items = q.data ?? []
   return (
     <Page
-      title="보고서"
-      sub={
-        <>
-          {items.length}건. <b className="text-[var(--fg)]">매칭조사</b>는 <code>/job-scout</code>로 직접 조사한 날의
-          기록, <b className="text-[var(--fg)]">자동사이클</b>은 Publish가 쓰는 사이클 요약입니다.
-        </>
-      }
+      title="조사 보고서"
+      sub={`${items.length}건의 조사·면접 자료`}
       source={<code>jobfeed/reports/*.md</code>}
     >
       {q.isPending && <Skeleton className="h-40 w-full" />}
       {q.error && (
-        <Card className="mb-3 rounded-lg border border-[var(--rail-bad)] bg-[var(--badbg)] px-3.5 py-3 text-[12.5px] text-[var(--bad)] ring-0">
+        <div role="alert" className="notice mb-3">
           보고서 목록을 불러오지 못했습니다 — {q.error.message}
-        </Card>
+        </div>
       )}
       {q.data &&
         (items.length ? (
-          <Card className="mb-3 gap-0 rounded-lg bg-[var(--row)] py-0 ring-[var(--line)]">
+          <div className="surface mb-3 divide-y divide-[var(--line)]">
             {items.map((it) => (
               <div
                 key={it.name}
-                className="grid grid-cols-1 items-center gap-2.5 border-b border-[var(--line)] px-3.5 py-2.5 last:border-b-0 hover:bg-[var(--hov)] min-[1060px]:grid-cols-[110px_90px_minmax(0,1fr)]"
+                className="min-w-0 px-4 py-3 hover:bg-[var(--hov)]"
               >
-                <div className="tabular text-[12.5px]">{it.date}</div>
-                <div>
-                  <Badge
-                    variant="outline"
-                    className={
-                      it.kind === '자동사이클'
-                        ? 'border-0 bg-[var(--goodbg)] text-[var(--good)]'
-                        : 'border-0 bg-[var(--neubg)] text-[var(--neu)]'
-                    }
-                  >
-                    {it.kind}
-                  </Badge>
-                </div>
-                <div className="font-semibold tracking-[-0.1px]">
-                  <Link href={`/reports/${encodeURIComponent(it.name)}`} className="text-inherit no-underline hover:underline">
-                    {it.name}
+                <div className="min-w-0 font-semibold [overflow-wrap:anywhere]">
+                  <Link href={`/reports/${encodeURIComponent(it.name)}`} className="inline-flex min-h-11 items-center text-[var(--link)] hover:underline">
+                    {it.title}
                   </Link>
+                </div>
+                <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-[var(--dim)]">
+                  <Badge variant="outline">{it.kind}</Badge>
+                  <span className="tabular">{it.date ?? '날짜 미확인'}</span>
+                  <span className="min-w-0 [overflow-wrap:anywhere]">{it.name}.md</span>
                 </div>
               </div>
             ))}
-          </Card>
+          </div>
         ) : (
-          <div className="mb-3 rounded-[9px] border border-dashed border-[var(--line)] bg-[var(--row)] p-8 text-center text-[13px] text-[var(--dim)]">
-            없음
+          <div className="empty-state mb-3">
+            저장된 보고서가 없습니다.
           </div>
         ))}
     </Page>

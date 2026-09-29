@@ -96,6 +96,32 @@ def test_dashboard_json(client):
     assert d["unresearched"] == ["테스트회사"] and d["stats"]["pending"] == 2   # 제외회사는 미조사에도 없다
 
 
+def test_received_offers_keep_excluded_and_join_only_exact_job(client, repo):
+    from jobscouter import offers
+
+    assert client.get("/api/offers").json()["items"] == []
+    offers.merge(repo / "jobfeed", [
+        {"id": str(i), "company": "제외회사" if cid == "444" else "테스트회사", "title": "받은 제안", "job_id": cid,
+         "status_code": "OFFER", "expires_at": "2999-01-01T23:59:59"}
+        for i, cid in enumerate(["", "111", "222", "444"], 1)
+    ], "2026-09-22")
+    (repo / "jobfeed/reports/wanted_offer_1.md").write_text("# 조사\n직무 확인 필요")
+    items = {i["id"]: i for i in client.get("/api/offers").json()["items"]}
+    assert items["1"]["state"] == "reviewed" and items["1"]["assessment"] is None
+    assert items["1"]["review"].startswith("# 조사")
+    assert items["2"]["state"] == "pending" and items["2"]["assessment"]["total"] == 79
+    assert items["3"]["state"] == "listed" and items["3"]["listed_scores"] == [30, 18, 20, 16, -5]
+    assert items["4"]["state"] == "excluded" and items["4"]["reason"] == "직무 불일치"
+    assert items["4"]["job_url"] == "https://www.wanted.co.kr/wd/444"
+    assert len(client.get("/api/dashboard").json()["groups"]) == 2
+
+    offers.merge(repo / "jobfeed", [{"id": "5", "company": "다른회사", "title": "같은 번호", "job_id": "111"},
+                                  {"id": "6", "company": "만료", "title": "옛 제안", "status_code": "OFFER", "expires_at": "2020-01-01T23:59:59"}], "2026-09-22")
+    items = client.get("/api/offers").json()["items"]
+    assert [i["id"] for i in items if i["active"]] == ["4", "3", "2", "1"]
+    assert next(i for i in items if i["id"] == "5")["assessment"] is None
+
+
 def test_dashboard_marks_busy_rows_when_publish_running(client, monkeypatch):
     async def running():
         return {"id": "publish-x", "status": "RUNNING", "start": "", "ids": ["111"],
@@ -233,7 +259,8 @@ def test_candidates_json(client):
 
 
 def test_reports_and_docs(client):
-    assert client.get("/api/reports").json() == [{"date": "x", "kind": "-", "name": "x"}]
+    assert client.get("/api/reports").json() == [
+        {"date": None, "kind": "기타 보고서", "name": "x", "title": "보고서"}]
     assert client.get("/api/reports/x").json()["markdown"].startswith("# 보고서")
     # httpx가 리터럴 ".."는 요청 전에 정규화해버리므로 %2e%2e로 서버까지 전달한다
     assert client.get("/api/reports/%2e%2e/x").status_code in (400, 404)
@@ -241,6 +268,30 @@ def test_reports_and_docs(client):
         {"path": "이력서_사실베이스.md", "name": "이력서_사실베이스.md", "group": "references"}]
     assert "경력 사실" in client.get("/api/docs/이력서_사실베이스.md").json()["markdown"]
     assert client.get("/api/docs/%2e%2e/이력서.md").status_code == 400
+
+
+def test_report_metadata_from_date_prefix_and_heading(client, repo):
+    reports = repo / "jobfeed/reports"
+    samples = {
+        "2026-09-14_자동사이클": ("자동 사이클", "2026-09-14", "자동 사이클 보고"),
+        "2026-09-14_매칭조사": ("매칭 조사", "2026-09-14", "매칭 조사"),
+        "2026-09-14_제안조사": ("받은 제안 조사", "2026-09-14", "제안 조사"),
+        "2026-09-14_삼성_신입공채_조사": ("공고 조사", "2026-09-14", "삼성 공고 조사"),
+        "2026-09-14_당근_LGCNS_공고검토": ("공고 조사", "2026-09-14", "공고 검토"),
+        "wanted_offer_12021987": ("받은 제안 조사", None, "받은 제안 조사"),
+        "wanted_interview_common": ("면접 준비", None, "면접 준비"),
+        "remember_342515": ("공고 조사", None, "개별 공고 조사"),
+        "2026-02-30_자동사이클": ("자동 사이클", None, "날짜 확인 필요"),
+        "untitled": ("기타 보고서", None, "untitled"),
+    }
+    for name, (_, _, title) in samples.items():
+        content = "본문만 있음" if name == "untitled" else f"# {title}\n\n본문"
+        (reports / f"{name}.md").write_text(content)
+        assert client.get(f"/api/reports/{name}").json() == {"name": name, "markdown": content}
+    items = {item["name"]: item for item in client.get("/api/reports").json()}
+    for name, (kind, day, title) in samples.items():
+        assert items[name] == {"name": name, "kind": kind, "date": day, "title": title}
+    assert [item["date"] for item in client.get("/api/reports").json()[:5]] == ["2026-09-14"] * 5
 
 
 def test_resume_document_and_proposals(client):

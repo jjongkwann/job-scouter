@@ -71,8 +71,12 @@ services:
       JOBSCOUTER_JOBFEED: /work/repo/jobfeed
       JOBSCOUTER_FACTBASE: /work/repo/references/이력서_사실베이스.md
       JOBSCOUTER_PROMPTS: /work/repo/job-scouter/prompts
+      JOBSCOUTER_APPLICATION_PACK: /work/application-pack
+      JOBSCOUTER_APPLICATION_SLIDES: /work/application-slide-studio
     volumes:
       - ${DATA_REPO}:/work/repo:ro   # API는 파일을 쓰지 않는다 — 쓰기는 워크플로(io 워커)만
+      - /Users/jk/apps/job-scouter/data/application-pack-20260929:/work/application-pack:ro
+      - /Users/jk/apps/job-scouter/data/application-slide-studio:/work/application-slide-studio:ro
     restart: always
     depends_on:
       - temporal

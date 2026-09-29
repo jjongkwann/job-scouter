@@ -7,11 +7,8 @@ import { Due } from '@/components/due'
 import { Page } from '@/components/page'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
-import { APP_FILES } from './doc-tabs'
-
-// web.py `.app` / `.orphan` 규격 그대로 — 1060px 이하에서는 한 열로 접힌다
-const GRID = 'grid-cols-[minmax(150px,.8fr)_minmax(230px,1.5fr)_66px_76px_152px_96px] max-[1060px]:grid-cols-1'
-const ORPHAN_GRID = 'grid-cols-[minmax(150px,.9fr)_minmax(0,1.6fr)_96px] max-[1060px]:grid-cols-1'
+const GRID = 'grid-cols-[minmax(150px,.8fr)_minmax(230px,1.5fr)_66px_76px_152px_96px] max-[1280px]:grid-cols-1'
+const ORPHAN_GRID = 'grid-cols-[minmax(150px,.9fr)_minmax(0,1.6fr)_96px] max-[1280px]:grid-cols-1'
 const RAIL: Record<string, string> = { good: 'rail-good', warn: 'rail-warn', bad: 'rail-bad', none: '' }
 
 const REC_CLS = (r: number) => (r >= 85 ? 'text-[var(--good)]' : r >= 70 ? 'text-[var(--fg)]' : 'text-[var(--dim)]')
@@ -29,25 +26,22 @@ export default function ApplicationsPage() {
 
   return (
     <Page
-      title="지원서류"
+      title="공고별 초안"
       sub={
         <>
-          공고별 지원서류를 모아 보여줍니다. 승인한 공고는{' '}
-          <b>JD·맞춤 이력서·자기소개서·면접지식맵·포트폴리오 구성</b> 5종 초안을 만들어 두고, 검토는 사람이 합니다.
+          후보로 등록한 공고의 초안 5종을 확인합니다. 생성된 초안은 내용 검토를 마친 서류나 실제 지원 기록을 뜻하지 않습니다.
         </>
       }
       source={
         <>
-          <code>applications/&lt;폴더&gt;/*.md</code> · <code>jobfeed/candidates.json</code>
+          후보 공고와 공고별 초안 기록
         </>
       }
       stats={
         s && [
           [s.candidates, '등재 공고'],
-          [s.folders, '지원서류 폴더'],
-          [s.linked, '공고에 연결됨'],
-          [s.gone, '공고 내려감'],
-          [s.unlinked, 'id 없음 — 수동 연결'],
+          [s.linked, '연결된 초안 폴더'],
+          [orphans.length, '공고 연결 미확인'],
         ]
       }
     >
@@ -58,17 +52,17 @@ export default function ApplicationsPage() {
       )}
 
       <h2 className="mt-0 mb-2 text-[15px] font-semibold">
-        공고에 연결된 폴더<span className="ml-1.5 text-[12px] font-normal text-[var(--dim)]">{linked.length}</span>
+        공고에 연결된 초안<span className="ml-1.5 text-[12px] font-normal text-[var(--dim)]">{linked.length}</span>
       </h2>
-      <div className="mb-6 overflow-hidden rounded-[9px] border border-[var(--line)] bg-[var(--row)]">
+      <div className="mb-6 min-w-0 rounded-[9px] border border-[var(--line)] bg-[var(--row)]">
         <div
-          className={`grid items-center gap-[10px] border-b border-[var(--line)] bg-[var(--bg)] px-[14px] py-[9px] text-[11px] text-[var(--dim)] max-[1060px]:hidden ${GRID}`}
+          className={`grid items-center gap-[10px] border-b border-[var(--line)] bg-[var(--bg)] px-[14px] py-[9px] text-[12px] text-[var(--dim)] max-[1280px]:hidden ${GRID}`}
         >
-          <div>회사 · 폴더</div>
+          <div>회사</div>
           <div>연결된 공고</div>
           <div>추천도</div>
           <div>마감</div>
-          <div>문서 (0_JD … 4_포트폴리오)</div>
+          <div>초안 문서</div>
           <div>최종 수정</div>
         </div>
 
@@ -84,29 +78,31 @@ export default function ApplicationsPage() {
           linked.map((it) => (
             <div
               key={it.slug + it.c.id}
-              className={`grid items-center gap-[10px] border-b border-[var(--line)] px-[14px] py-[9px] last:border-b-0 hover:bg-[var(--hov)] rail ${RAIL[it.c.rep_key]} ${GRID} max-[1060px]:py-[13px] ${it.c.closed ? 'opacity-55' : ''}`}
+              className={`grid min-w-0 items-center gap-[10px] border-b border-[var(--line)] px-[14px] py-[9px] last:border-b-0 hover:bg-[var(--hov)] rail ${RAIL[it.c.rep_key]} ${GRID} max-[1280px]:py-[13px]`}
             >
-              <div>
-                <div className="text-[14px] leading-[1.35] font-semibold tracking-[-0.1px]">
+              <div className="min-w-0">
+                <div className="break-words text-[14px] leading-[1.35] font-semibold tracking-[-0.1px]">
                   <Link
-                    href={`/applications/job/${encodeURIComponent(it.c.id)}`}
+                    href={`/applications/job/${encodeURIComponent(it.c.id)}?folder=${encodeURIComponent(it.slug)}`}
                     className="text-inherit no-underline hover:underline hover:underline-offset-2"
                   >
                     {it.c.company}
                   </Link>
+                  {it.c.closed && <span className="ml-2 text-[12px] font-normal text-[var(--dim)]">공고 마감</span>}
                 </div>
-                <div className="mt-px font-mono text-[11.5px] text-[var(--dim)]">{it.slug}</div>
+                <div className="mt-px break-all text-[12px] text-[var(--dim)]">폴더 {it.slug}</div>
               </div>
 
-              <div className="text-[12.5px] leading-[1.4]">
+              <div className="min-w-0 break-words text-[13px] leading-[1.4]">
                 <div>{it.c.title}</div>
-                <div className="text-[11px] text-[var(--dim)]">
+                <div className="break-all text-[12px] text-[var(--dim)]">
                   {it.c.id}
                   {it.others > 0 && ` · 이 회사 공고 ${it.others + 1}건`}
                 </div>
               </div>
 
               <div className={`text-[15px] leading-[1.1] font-extrabold tabular ${REC_CLS(it.c.rec)}`}>
+                <span className="mr-1 hidden text-[12px] font-normal text-[var(--dim)] max-[1280px]:inline">추천도</span>
                 {Math.round(it.c.rec)}
                 <span className="mt-px block text-[10px] font-semibold text-[var(--dim)]">
                   {it.c.rank ? `#${it.c.rank}` : '마감'}
@@ -115,29 +111,9 @@ export default function ApplicationsPage() {
 
               <Due due={it.c.due} cls={it.c.due_cls} />
 
-              <div className="flex items-center gap-2">
-                <div className="flex gap-[3px]">
-                  {APP_FILES.map((f) => (
-                    <span
-                      key={f}
-                      className={`inline-flex h-[17px] w-[17px] items-center justify-center rounded-[4px] text-[9.5px] font-semibold ${
-                        it.docs.includes(f)
-                          ? 'bg-[var(--goodbg)] text-[var(--good)]'
-                          : 'bg-[var(--neubg)] text-[var(--faint)]'
-                      }`}
-                    >
-                      {f[0]}
-                    </span>
-                  ))}
-                </div>
-                <span
-                  className={`text-[11px] tabular ${it.docs.length === 5 ? 'text-[var(--dim)]' : 'font-semibold text-[var(--warn)]'}`}
-                >
-                  {it.docs.length === 5 ? '5종' : `${it.docs.length} / 5`}
-                </span>
-              </div>
+              <div className="text-[12px] tabular text-[var(--dim)]">초안 {it.docs.length}/5종 생성</div>
 
-              <div className="text-[11.5px] tabular text-[var(--dim)]">{it.mtime}</div>
+              <div className="text-[12px] tabular text-[var(--dim)]"><span className="hidden max-[1280px]:inline">최종 수정 </span>{it.mtime}</div>
             </div>
           ))
         )}
@@ -146,20 +122,19 @@ export default function ApplicationsPage() {
       {orphans.length > 0 && (
         <>
           <h2 className="mt-0 mb-2 text-[15px] font-semibold">
-            공고를 못 찾은 폴더<span className="ml-1.5 text-[12px] font-normal text-[var(--dim)]">{orphans.length}</span>
+            공고 연결 미확인 초안<span className="ml-1.5 text-[12px] font-normal text-[var(--dim)]">{orphans.length}</span>
           </h2>
           <Card className="mb-2 rounded-[9px] px-[14px] py-[10px] text-[12.5px] leading-[1.55] text-[var(--dim)]">
-            문서에 적힌 공고가 후보목록에서 <b>내려간</b> 경우와, 공고 링크가 <b>아예 없는</b> 경우입니다. 후자는 문서
-            어딘가에 원티드·점핏 링크를 한 줄 적어 주면 다음 열람부터 이어집니다.
+            후보목록에서 공고가 내려갔거나 문서에 공고 링크가 없는 폴더입니다. 연결되지 않은 초안도 열어볼 수 있습니다.
           </Card>
-          <div className="overflow-hidden rounded-[9px] border border-[var(--line)] bg-[var(--row)]">
+          <div className="min-w-0 rounded-[9px] border border-[var(--line)] bg-[var(--row)]">
             {orphans.map((o) => (
               <div
                 key={o.slug}
-                className={`grid items-center gap-[10px] border-b border-[var(--line)] px-[14px] py-[9px] last:border-b-0 hover:bg-[var(--hov)] ${ORPHAN_GRID} max-[1060px]:py-[13px]`}
+                className={`grid min-w-0 items-center gap-[10px] border-b border-[var(--line)] px-[14px] py-[9px] last:border-b-0 hover:bg-[var(--hov)] ${ORPHAN_GRID} max-[1280px]:py-[13px]`}
               >
-                <div>
-                  <div className="text-[14px] leading-[1.35] font-semibold tracking-[-0.1px]">
+                <div className="min-w-0">
+                  <div className="break-all text-[14px] leading-[1.35] font-semibold tracking-[-0.1px]">
                     <Link
                       href={`/applications/${encodeURIComponent(o.slug)}`}
                       className="text-inherit no-underline hover:underline hover:underline-offset-2"
@@ -167,12 +142,12 @@ export default function ApplicationsPage() {
                       {o.slug}
                     </Link>
                   </div>
-                  <div className="mt-px text-[12px] text-[var(--dim)]">
-                    md {o.files.length}
+                  <div className="mt-px break-all text-[12px] text-[var(--dim)]">
+                    초안 {o.docs.length}/5종 · 파일 {o.files.length}개
                     {o.ids.length > 0 && ` · ${o.ids.join(', ')}`}
                   </div>
                 </div>
-                <div className="text-[12.5px] text-[var(--dim)]">{o.why}</div>
+                <div className="min-w-0 break-words text-[13px] text-[var(--dim)]">{o.why}</div>
                 <div>
                   <span
                     className={`inline-block rounded-[4px] px-[7px] py-[2px] text-[11px] font-semibold ${

@@ -3,7 +3,8 @@ import type { NextRequest } from 'next/server'
 export const dynamic = 'force-dynamic'
 
 const API = process.env.API_URL ?? 'http://localhost:8091'
-const FWD = ['content-type', 'accept', 'sec-fetch-site']
+const FWD = ['content-type', 'accept', 'sec-fetch-site', 'range', 'if-range']
+const RESPONSE_HEADERS = ['content-type', 'content-disposition', 'content-length', 'accept-ranges', 'content-range', 'etag', 'last-modified']
 
 async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
   const { path } = await ctx.params
@@ -20,9 +21,11 @@ async function proxy(req: NextRequest, ctx: { params: Promise<{ path: string[] }
   }
   const res = await fetch(`${API}/api/${path.map(encodeURIComponent).join('/')}${url.search}`, init)
   const out = new Headers({ 'cache-control': 'no-store' })
-  const ct = res.headers.get('content-type')
-  if (ct) out.set('content-type', ct)
-  return new Response(res.body, { status: res.status, headers: out })
+  for (const h of RESPONSE_HEADERS) {
+    const v = res.headers.get(h)
+    if (v) out.set(h, v)
+  }
+  return new Response(req.method === 'HEAD' ? null : res.body, { status: res.status, headers: out })
 }
 
-export { proxy as GET, proxy as POST }
+export { proxy as GET, proxy as HEAD, proxy as POST }

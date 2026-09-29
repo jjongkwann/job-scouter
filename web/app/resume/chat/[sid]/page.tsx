@@ -52,16 +52,20 @@ function ChatView() {
   const turns = q.data?.turns ?? []
   return (
     <Page
-      title={`대화로 고치기 — ${key}`}
+      title="이력서 대화로 수정"
+      back={{ href: "/resume", label: "공통 이력서" }}
       sub={
         <>
-          <code>{key}</code>를 대화로 고칩니다. 저장 전까지는 세션 버퍼일 뿐이라 원본은 바뀌지 않습니다.{' '}
+          <code>{key}</code>의 수정안을 만듭니다. 변경 내용을 확인한 뒤 ‘이력서에 저장’을 누르면 원본에 반영됩니다.{' '}
           <Link href="/resume">이력서 보기로 돌아가기</Link>
         </>
       }
     >
+      {q.error && <div role="alert" className="notice text-[var(--bad)]">대화를 불러오지 못했습니다: {q.error.message}</div>}
+      {send.error && <div role="alert" className="notice text-[var(--bad)]">수정 요청을 보내지 못했습니다: {send.error.message}. 입력한 내용은 유지됩니다.</div>}
+      {end.error && !failed && <div role="alert" className="notice text-[var(--bad)]">작업을 마치지 못했습니다: {end.error.message}</div>}
       {failed && (
-        <Card className="mb-3 gap-2 rounded-lg border border-[var(--rail-bad)] bg-[var(--badbg)] px-3.5 py-2.5 text-[12.5px] leading-[1.5] text-[var(--bad)] ring-0">
+        <Card className="mb-3 gap-2 rounded-lg border border-[var(--rail-bad)] bg-[var(--badbg)] px-3.5 py-2.5 text-[14px] leading-[1.5] text-[var(--bad)] ring-0">
           <div>
             <b>저장하지 못했습니다.</b> {failed.detail}
           </div>
@@ -89,12 +93,12 @@ function ChatView() {
         </Card>
       )}
 
-      <div className="grid grid-cols-1 items-start gap-4 min-[1060px]:grid-cols-2">
+      <div className="grid grid-cols-1 items-start gap-4 min-[1280px]:grid-cols-2">
         <div>
           <Card className="mb-3 gap-0 rounded-lg bg-[var(--row)] py-0 ring-[var(--line)]">
             {q.isPending && <Skeleton className="m-3.5 h-16" />}
             {turns.map((t, i) => (
-              <div key={i} className="border-b border-[var(--line)] px-3.5 py-2.5 text-[12.5px] last:border-b-0">
+              <div key={i} className="border-b border-[var(--line)] px-3.5 py-2.5 text-[14px] last:border-b-0">
                 {t.role === 'user' ? (
                   <div>
                     <b>나</b> {t.text}
@@ -117,7 +121,7 @@ function ChatView() {
               </div>
             ))}
             {q.data?.pending && (
-              <div className="flex items-center gap-2.5 border-b border-[var(--line)] px-3.5 py-2.5 text-[12.5px] last:border-b-0">
+              <div className="flex items-center gap-2.5 border-b border-[var(--line)] px-3.5 py-2.5 text-[14px] last:border-b-0">
                 <b>조수</b>
                 <span className="text-[var(--dim)]">생성 중…</span>
                 <Skeleton className="h-4 flex-1" />
@@ -131,10 +135,11 @@ function ChatView() {
           <div className="mt-2.5 flex items-center gap-3 rounded-[9px] border border-[var(--line)] bg-[var(--row)] px-3.5 py-2.5">
             <Textarea
               rows={3}
+              aria-label="이력서 수정 요청"
               placeholder="수정 요청을 입력하세요"
               value={message}
               onChange={(e) => setMessage(e.target.value)}
-              className="flex-1 rounded-md border-[var(--line)] text-[12px]"
+              className="min-w-0 flex-1 rounded-xl border-[var(--line)] text-base"
             />
             <Button
               className="rounded-full text-[12px]"
@@ -153,7 +158,7 @@ function ChatView() {
           </Card>
           <div className="flex items-center gap-2 rounded-[9px] border border-[var(--line)] bg-[var(--row)] px-3.5 py-2.5">
             <Button className="rounded-full text-[12px]" disabled={end.isPending} onClick={() => end.mutate(true)}>
-              저장
+              이력서에 저장
             </Button>
             <Button
               variant="outline"
@@ -161,7 +166,7 @@ function ChatView() {
               disabled={end.isPending}
               onClick={() => end.mutate(false)}
             >
-              버림
+              수정안 버리기
             </Button>
           </div>
         </div>

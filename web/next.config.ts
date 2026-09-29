@@ -13,6 +13,15 @@ const CSP = [
 
 const config: NextConfig = {
   output: 'standalone',
+  async rewrites() {
+    return [{
+      source: '/slides',
+      destination: `${process.env.API_URL ?? 'http://localhost:8091'}/api/application-slides/site/`,
+    }, {
+      source: '/slides/:path*',
+      destination: `${process.env.API_URL ?? 'http://localhost:8091'}/api/application-slides/site/:path*`,
+    }]
+  },
   async headers() {
     return [
       {

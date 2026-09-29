@@ -34,13 +34,15 @@ test('grouped postings retain source links and independent publish decisions', a
     expect(host.textContent).toContain('같은 공고 2개 사이트')
     expect(host.querySelector('a[href="https://example.com/wanted"]')).not.toBeNull()
     expect(host.querySelector('a[href="https://example.com/jumpit"]')).not.toBeNull()
-    const approve = host.querySelectorAll<HTMLButtonElement>('button[aria-label$=" 승인"]')
-    const reject = host.querySelectorAll<HTMLButtonElement>('button[aria-label$=" 거부"]')
+    expect(host.textContent).toContain('wanted 판정')
+    expect(host.textContent).toContain('jumpit 판정')
+    const approve = host.querySelectorAll<HTMLButtonElement>('button[aria-label$=" 후보 등록"]')
+    const reject = host.querySelectorAll<HTMLButtonElement>('button[aria-label$=" 후보에서 제외"]')
     await act(async () => approve[1].click())
     expect(approve[0].getAttribute('aria-pressed')).toBe('false')
     expect(approve[1].getAttribute('aria-pressed')).toBe('true')
     await act(async () => reject[0].click())
-    const submit = [...host.querySelectorAll('button')].find((b) => b.textContent === '제출')!
+    const submit = [...host.querySelectorAll('button')].find((b) => b.textContent === '2건 선택 처리')!
     await act(async () => submit.click())
     expect(publish).toHaveBeenCalledWith('/publish', { ids: ['j2'], rejects: [{ id: '1', why: '적합도 낮음' }] })
   } finally {

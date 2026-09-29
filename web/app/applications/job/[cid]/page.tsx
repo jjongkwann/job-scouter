@@ -1,6 +1,7 @@
 'use client'
-import { use, useState } from 'react'
+import { use } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
@@ -8,7 +9,7 @@ import { ApiError, get, post, type JobApplication } from '@/lib/api'
 import { Due } from '@/components/due'
 import { Fit } from '@/components/fit'
 import { Page } from '@/components/page'
-import { Badge } from '@/components/ui/badge'
+import { JobApplicationFiles } from '@/components/application-files'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -27,11 +28,13 @@ const REP_CLS: Record<string, string> = {
 }
 const AXES = ['스택', '도메인', '레벨', '역할']
 
-export default function JobApplicationPage({ params }: { params: Promise<{ cid: string }> }) {
+export default function JobApplicationPage({ params, searchParams }: { params: Promise<{ cid: string }>; searchParams: Promise<{ folder?: string }> }) {
   const { cid } = use(params)
+  const { folder: requestedFolder } = use(searchParams)
+  const router = useRouter()
   const qc = useQueryClient()
-  // 같은 공고를 가리키는 폴더가 여럿(원본 + 재생성 슬롯 _draft)일 때 고른 것. 비면 서버 기본(원본)
-  const [folderSlug, setFolderSlug] = useState('')
+  // 같은 공고를 가리키는 폴더가 여럿일 때 URL로 선택을 보존한다. 비면 서버 기본(원본)
+  const folderSlug = requestedFolder ?? ''
 
   const { data, isPending, error } = useQuery({
     queryKey: ['application-job', cid, folderSlug],
@@ -52,7 +55,7 @@ export default function JobApplicationPage({ params }: { params: Promise<{ cid: 
 
   if (error)
     return (
-      <Page title="지원서류">
+      <Page title="지원서류" back={{ href: '/applications', label: '공고별 초안' }}>
         <Card className="rounded-[9px] border-[var(--rail-bad)] bg-[var(--badbg)] px-[14px] py-[10px] text-[12.5px] text-[var(--bad)]">
           {error instanceof ApiError ? error.detail : String(error)}
         </Card>
@@ -61,7 +64,7 @@ export default function JobApplicationPage({ params }: { params: Promise<{ cid: 
 
   if (isPending || !data)
     return (
-      <Page title="지원서류">
+      <Page title="지원서류" back={{ href: '/applications', label: '공고별 초안' }}>
         <Skeleton className="mb-4 h-44 w-full" />
         <Skeleton className="h-64 w-full" />
       </Page>
@@ -70,112 +73,95 @@ export default function JobApplicationPage({ params }: { params: Promise<{ cid: 
   const { candidate: c, folder, folders, others, docs, drafting } = data
   const experienceBlocked = c.experience_review_required || c.experience_excluded
   const src = c.src === 'wanted' ? '원티드' : c.src === 'jumpit' ? '점핏' : c.src === 'remember' ? '리멤버' : '공식 채용'
-  const status = c.closed ? '공고 마감' : folder ? '미지원' : '초안 없음'
+  const status = drafting ? '초안 생성 중' : folder?.docs.length ? `초안 ${folder.docs.length}/5종 생성` : '초안 없음'
   const extra = folder ? folder.files.filter((f) => !APP_FILES.includes(f)) : []
 
   return (
     <Page
       title={c.company}
-      sub={
-        folder ? (
-          <>
-            <code>applications/{folder.slug}</code> · 문서 {folder.docs.length}/5
-          </>
-        ) : (
-          '이 공고에 연결된 지원서류 폴더가 아직 없습니다.'
-        )
-      }
+      back={{ href: '/applications', label: '공고별 초안' }}
+      sub={folder ? `초안 ${folder.docs.length}/5종 생성 · 최종 수정 ${folder.mtime}` : '이 공고에 연결된 초안이 아직 없습니다.'}
     >
       <div
-        className={`mb-4 rounded-[9px] border border-[var(--line)] bg-[var(--row)] px-[18px] py-[15px] rail ${RAIL[c.rep_key]} ${c.closed ? 'opacity-60' : ''}`}
+        className={`surface rail mb-4 min-w-0 p-4 ${RAIL[c.rep_key]}`}
       >
-        <div className="flex items-start justify-between gap-5 border-b border-[var(--line)] pb-[11px]">
-          <div>
-            <div className="text-[16px] leading-[1.3] font-bold tracking-[-0.2px]">
+        <div className="flex flex-wrap items-start justify-between gap-5 border-b border-[var(--line)] pb-[11px]">
+          <div className="min-w-0">
+            <div className="break-words text-[16px] leading-[1.3] font-bold tracking-[-0.2px]">
               {c.title}
               <span
-                className={`ml-2 inline-block rounded-[4px] px-[7px] py-[2px] align-middle text-[11px] font-semibold ${
-                  c.closed ? 'bg-[var(--badbg)] text-[var(--bad)]' : 'bg-[var(--neubg)] text-[var(--neu)]'
-                }`}
+                className="ml-2 inline-block rounded-md bg-[var(--neubg)] px-2 py-1 align-middle text-[12px] font-semibold text-[var(--neu)]"
               >
                 {status}
               </span>
+              {c.closed && <span className="ml-2 inline-block rounded-md bg-[var(--badbg)] px-2 py-1 align-middle text-[12px] font-semibold text-[var(--bad)]">공고 마감</span>}
             </div>
-            <div className="mt-[3px] text-[12px] text-[var(--dim)]">
+            <div className="mt-1 break-all text-[12px] text-[var(--dim)]">
               {c.company} ·{' '}
-              <a href={c.url} target="_blank" rel="noopener" className="text-[var(--accent)] no-underline hover:underline">
+              <a href={c.url} target="_blank" rel="noopener" className="text-[var(--link)] no-underline hover:underline">
                 {src} {c.id} ↗
               </a>
-              {folder && (
-                <>
-                  {' · '}
-                  <code>applications/{folder.slug}</code>
-                </>
-              )}
             </div>
           </div>
           <div className={`text-right text-[17px] leading-[1.1] font-extrabold tabular ${REC_CLS(c.rec)}`}>
             {experienceBlocked ? '—' : Math.round(c.rec)}
-            <span className="mt-px block text-[10px] font-semibold text-[var(--dim)]">
+            <span className="mt-1 block text-[12px] font-semibold text-[var(--dim)]">
               추천도{c.rank ? ` · #${c.rank}` : ''}
             </span>
           </div>
         </div>
 
-        <div className="grid grid-cols-[250px_96px_158px_minmax(0,1fr)] gap-5 py-[13px] max-[1060px]:grid-cols-1 max-[1060px]:gap-3">
+        <div className="grid grid-cols-[250px_96px_158px_minmax(0,1fr)] gap-5 py-3 max-[1280px]:grid-cols-1 max-[1280px]:gap-3">
           <div>
-            <div className="mb-[5px] text-[11px] text-[var(--dim)]">적합도</div>
+            <div className="mb-1 text-[12px] text-[var(--dim)]">적합도</div>
             <Fit total={c.total} tier={c.tier} />
-            <div className="mt-1 text-[11px] leading-[1.45] text-[var(--dim)]">
+            <div className="mt-1 text-[12px] leading-[1.45] text-[var(--dim)]">
               {AXES.map((a, i) => `${a} ${c.scores[i] ?? 0}`).join(' · ')} · 감점 {c.scores[4] || '—'}
             </div>
           </div>
           <div>
-            <div className="mb-[5px] text-[11px] text-[var(--dim)]">마감</div>
+            <div className="mb-1 text-[12px] text-[var(--dim)]">마감</div>
             <Due due={c.due} cls={c.due_cls} />
           </div>
           <div>
-            <div className="mb-[5px] text-[11px] text-[var(--dim)]">근무지 · 통근</div>
-            <div className={`text-[12px] ${ZONE_CLS(c.zone)}`}>{c.zone_label}</div>
-            <div className="mt-1 text-[11px] leading-[1.45] text-[var(--dim)]">{c.addr}</div>
+            <div className="mb-1 text-[12px] text-[var(--dim)]">근무지 · 통근</div>
+            <div className={`text-[13px] ${ZONE_CLS(c.zone)}`}>{c.zone_label}</div>
+            <div className="mt-1 break-words text-[12px] leading-[1.45] text-[var(--dim)]">{c.addr}</div>
           </div>
           <div>
-            <div className="mb-[5px] text-[11px] text-[var(--dim)]">평판</div>
+            <div className="mb-1 text-[12px] text-[var(--dim)]">평판</div>
             {c.rep ? (
-              <div className="text-[12px] leading-[1.45]">
+              <div className="text-[13px] leading-[1.45]">
                 <span className={`font-bold ${REP_CLS[c.rep_key]}`}>
                   {c.rep_label} {c.rep[1]}
                 </span>
                 <span className="text-[var(--dim)]">
                   {' '}
-                  / {c.rep[2]}건 · ★{c.rep[3]}
+                  / {c.rep[2] ?? '표본 미확인'}{c.rep[2] === null ? '' : '건'} · ★{c.rep[3]}
                 </span>
-                <div className="text-[11px] text-[var(--dim)]">{c.rep[4]}</div>
+                <div className="text-[12px] text-[var(--dim)]">{c.rep[4]}</div>
               </div>
             ) : (
-              <div className="text-[12px] text-[var(--faint)]">{c.rep_note}</div>
+              <div className="text-[13px] text-[var(--dim)]">평판 정보 없음</div>
             )}
           </div>
         </div>
 
-        {experienceBlocked && <p className="text-[12px] text-[var(--warn)]">{c.experience_review_required ? `경력 ${c.career} · AI 재검토 대기` : `경력 검토 제외 · ${c.experience_reason}`} — 기존 문서는 열람할 수 있으며 새 초안 생성은 보류됩니다.</p>}
+        {c.rep_note && <p className="mb-1 break-words text-[13px] text-[var(--dim)]">등록 메모 · {c.rep_note}</p>}
+        {experienceBlocked && <p className="text-[13px] text-[var(--warn)]">{c.experience_review_required ? `경력 ${c.career} · AI 재검토 대기` : `경력 검토 제외 · ${c.experience_reason}`} — 기존 문서는 열람할 수 있으며 새 초안 생성은 보류됩니다.</p>}
+        {draft.error && <p role="alert" className="notice text-[var(--bad)]">초안 생성을 시작하지 못했습니다: {draft.error instanceof ApiError ? draft.error.detail : String(draft.error)}</p>}
         <div className="flex flex-wrap items-center gap-2 pt-[11px]">
           {folder && (
-            <span className="mr-auto text-[11px] text-[var(--dim)]">
-              최종 수정 {folder.mtime} · 문서 {folder.docs.length}/5
+            <span className="mr-auto text-[12px] text-[var(--dim)]">
+              초안 {folder.docs.length}/5종 · 최종 수정 {folder.mtime}
             </span>
           )}
           <Link
-            href="/candidates"
-            className="rounded-full border border-[var(--line)] px-[11px] py-[3px] text-[12px] no-underline hover:border-[var(--dim)]"
+            href={`/candidates?candidate=${encodeURIComponent(cid)}`}
+            className="inline-flex min-h-11 items-center rounded-xl border border-[var(--line)] px-3 py-2 text-[13px] no-underline hover:border-[var(--link)]"
           >
-            후보목록에서 보기
+            후보목록의 이 공고 보기
           </Link>
-          {drafting && (
-            <Badge variant="outline" className="rounded-full border-[var(--warn)] px-[11px] py-[3px] text-[11px] text-[var(--warn)]">
-              초안 생성 중
-            </Badge>
-          )}
           <Button
             size="sm"
             variant={folder ? 'outline' : 'default'}
@@ -187,12 +173,13 @@ export default function JobApplicationPage({ params }: { params: Promise<{ cid: 
         </div>
       </div>
 
-      <div className="grid grid-cols-[minmax(0,1fr)_260px] items-start gap-4 max-[1060px]:grid-cols-1">
+      <JobApplicationFiles cid={cid} />
+      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_260px] items-start gap-4 max-[1280px]:grid-cols-1">
         <div>
           {folders.length > 1 && folder && (
-            <div className="mb-2 flex flex-wrap items-center gap-2 text-[11.5px] text-[var(--dim)]">
+            <div className="mb-2 flex flex-wrap items-center gap-2 text-[12px] text-[var(--dim)]">
               <span>폴더</span>
-              <ToggleGroup value={[folder.slug]} onValueChange={(v) => v[0] && setFolderSlug(String(v[0]))}>
+              <ToggleGroup value={[folder.slug]} onValueChange={(v) => v[0] && router.replace(`/applications/job/${encodeURIComponent(cid)}?folder=${encodeURIComponent(String(v[0]))}`)}>
                 {folders.map((f) => (
                   <ToggleGroupItem
                     key={f.slug}
@@ -205,7 +192,7 @@ export default function JobApplicationPage({ params }: { params: Promise<{ cid: 
                   </ToggleGroupItem>
                 ))}
               </ToggleGroup>
-              <span>재생성은 원본을 두고 _draft 슬롯에 덮어씁니다</span>
+              <span>재생성 초안은 원본과 별도로 보관됩니다.</span>
             </div>
           )}
           <DocTabs
@@ -215,8 +202,7 @@ export default function JobApplicationPage({ params }: { params: Promise<{ cid: 
                 아직 문서가 없습니다.
                 <br />
                 <span className="text-[12px]">
-                  초안 생성은 몇 분 걸립니다 — 끝나면 <code>0_JD</code>부터 <code>4_포트폴리오_구성</code>까지 5종이 이
-                  자리에 채워집니다.
+                  초안 생성은 몇 분 걸립니다. 공고·맞춤 이력서·자기소개서·면접 준비·포트폴리오 구성 문서가 이 자리에 채워집니다.
                 </span>
               </>
             }
