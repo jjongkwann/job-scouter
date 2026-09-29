@@ -45,6 +45,13 @@ export function ApplicationFileCard({ pack }: { pack: ApplicationFilePack }) {
         ))}
       </div>
       <p className="mb-3 text-[12px] text-[var(--dim)]">생성된 파일입니다. 내용 검토나 실제 지원 여부는 기록되어 있지 않습니다.</p>
+      {(pack.limitations || pack.review_notes) && (
+        <div className="mb-3 rounded-lg bg-[var(--warnbg)] px-3 py-2 text-[13px] leading-relaxed">
+          <p className="font-medium">경험 범위·지원 전 확인</p>
+          {pack.limitations && <p className="mt-1 whitespace-pre-line">{pack.limitations}</p>}
+          {pack.review_notes && <p className="mt-1 whitespace-pre-line">{pack.review_notes}</p>}
+        </div>
+      )}
       <div className="flex flex-wrap gap-2">
         {pack.slide && (
           <a href={pack.slide.url} target="_blank" rel="noopener"
@@ -61,11 +68,9 @@ export function ApplicationFileCard({ pack }: { pack: ApplicationFilePack }) {
         ))}
         {pack.bundle && <a href={pack.bundle.url} className={LINK}>이 세트 ZIP 받기</a>}
       </div>
-      {(pack.review_notes || pack.limitations || sourceUrls.length > 0) && (
+      {sourceUrls.length > 0 && (
         <details className="mt-3 text-[13px] text-[var(--dim)]">
-          <summary className="min-h-11 cursor-pointer py-3">{pack.review_notes || pack.limitations ? '경험 범위·지원 전 확인' : '공고 원문'}</summary>
-          {pack.limitations && <p className="whitespace-pre-line">{pack.limitations}</p>}
-          {pack.review_notes && <p>{pack.review_notes}</p>}
+          <summary className="min-h-11 cursor-pointer py-3">공고 원문</summary>
           <div className="flex flex-wrap gap-3">
             {sourceUrls.map((url, i) => (
               <a key={url} href={url} target="_blank" rel="noopener" className="text-[var(--link)] underline underline-offset-2">원문 {i + 1} ↗</a>

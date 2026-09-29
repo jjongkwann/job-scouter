@@ -1,4 +1,5 @@
 'use client'
+import { useState } from 'react'
 import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
 
@@ -6,14 +7,16 @@ import { ApiError, get, type Applications } from '@/lib/api'
 import { Due } from '@/components/due'
 import { Page } from '@/components/page'
 import { Card } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
-const GRID = 'grid-cols-[minmax(150px,.8fr)_minmax(230px,1.5fr)_66px_76px_152px_96px] max-[1280px]:grid-cols-1'
+const GRID = 'grid-cols-[minmax(150px,.8fr)_minmax(230px,1.5fr)_66px_76px_152px_96px] max-[1280px]:grid-cols-2'
 const ORPHAN_GRID = 'grid-cols-[minmax(150px,.9fr)_minmax(0,1.6fr)_96px] max-[1280px]:grid-cols-1'
 const RAIL: Record<string, string> = { good: 'rail-good', warn: 'rail-warn', bad: 'rail-bad', none: '' }
 
 const REC_CLS = (r: number) => (r >= 85 ? 'text-[var(--good)]' : r >= 70 ? 'text-[var(--fg)]' : 'text-[var(--dim)]')
 
 export default function ApplicationsPage() {
+  const [search, setSearch] = useState('')
   const { data, isPending, error } = useQuery({
     queryKey: ['applications'],
     queryFn: () => get<Applications>('/applications'),
@@ -23,6 +26,9 @@ export default function ApplicationsPage() {
   const s = data?.stats
   const linked = data?.linked ?? []
   const orphans = data?.orphans ?? []
+  const query = search.trim().toLocaleLowerCase()
+  const shownLinked = linked.filter((it) => [it.c.company, it.c.title, it.c.id, it.slug].join(' ').toLocaleLowerCase().includes(query))
+  const shownOrphans = orphans.filter((it) => [it.slug, ...it.ids].join(' ').toLocaleLowerCase().includes(query))
 
   return (
     <Page
@@ -51,8 +57,12 @@ export default function ApplicationsPage() {
         </Card>
       )}
 
+      <label htmlFor="applications-search" className="mb-1.5 block text-[13px] font-medium">회사·직무·공고 ID 검색</label>
+      <Input id="applications-search" type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="회사, 직무 또는 공고 ID" className="mb-2 max-w-2xl" />
+      {data && <p className="mb-4 text-[12px] text-[var(--dim)]" aria-live="polite">연결 {shownLinked.length} / {linked.length}폴더 · 미연결 {shownOrphans.length} / {orphans.length}폴더</p>}
+
       <h2 className="mt-0 mb-2 text-[15px] font-semibold">
-        공고에 연결된 초안<span className="ml-1.5 text-[12px] font-normal text-[var(--dim)]">{linked.length}</span>
+        공고에 연결된 초안<span className="ml-1.5 text-[12px] font-normal text-[var(--dim)]">{shownLinked.length}</span>
       </h2>
       <div className="mb-6 min-w-0 rounded-[9px] border border-[var(--line)] bg-[var(--row)]">
         <div
@@ -72,10 +82,10 @@ export default function ApplicationsPage() {
               <Skeleton className="h-9 w-full" />
             </div>
           ))
-        ) : linked.length === 0 ? (
-          <div className="p-8 text-center text-[13px] text-[var(--dim)]">공고에 연결된 폴더가 아직 없습니다</div>
+        ) : shownLinked.length === 0 ? (
+          <div className="p-8 text-center text-[13px] text-[var(--dim)]">{query ? '검색 결과가 없습니다.' : '공고에 연결된 폴더가 아직 없습니다.'}</div>
         ) : (
-          linked.map((it) => (
+          shownLinked.map((it) => (
             <div
               key={it.slug + it.c.id}
               className={`grid min-w-0 items-center gap-[10px] border-b border-[var(--line)] px-[14px] py-[9px] last:border-b-0 hover:bg-[var(--hov)] rail ${RAIL[it.c.rep_key]} ${GRID} max-[1280px]:py-[13px]`}
@@ -122,13 +132,13 @@ export default function ApplicationsPage() {
       {orphans.length > 0 && (
         <>
           <h2 className="mt-0 mb-2 text-[15px] font-semibold">
-            공고 연결 미확인 초안<span className="ml-1.5 text-[12px] font-normal text-[var(--dim)]">{orphans.length}</span>
+            공고 연결 미확인 초안<span className="ml-1.5 text-[12px] font-normal text-[var(--dim)]">{shownOrphans.length}</span>
           </h2>
           <Card className="mb-2 rounded-[9px] px-[14px] py-[10px] text-[12.5px] leading-[1.55] text-[var(--dim)]">
-            후보목록에서 공고가 내려갔거나 문서에 공고 링크가 없는 폴더입니다. 연결되지 않은 초안도 열어볼 수 있습니다.
+            현재 후보 공고와 연결되지 않은 보관 문서입니다. 문서에서 확인된 공고 ID의 후보 등록 여부와 연결 정보를 함께 표시합니다.
           </Card>
           <div className="min-w-0 rounded-[9px] border border-[var(--line)] bg-[var(--row)]">
-            {orphans.map((o) => (
+            {shownOrphans.map((o) => (
               <div
                 key={o.slug}
                 className={`grid min-w-0 items-center gap-[10px] border-b border-[var(--line)] px-[14px] py-[9px] last:border-b-0 hover:bg-[var(--hov)] ${ORPHAN_GRID} max-[1280px]:py-[13px]`}
@@ -147,18 +157,19 @@ export default function ApplicationsPage() {
                     {o.ids.length > 0 && ` · ${o.ids.join(', ')}`}
                   </div>
                 </div>
-                <div className="min-w-0 break-words text-[13px] text-[var(--dim)]">{o.why}</div>
+                <div className="min-w-0 break-words text-[13px] text-[var(--dim)]">{o.ids.length > 0 ? '확인된 공고 ID가 현재 후보목록에 없습니다.' : '문서에서 연결할 공고 ID를 확인하지 못했습니다.'}</div>
                 <div>
                   <span
                     className={`inline-block rounded-[4px] px-[7px] py-[2px] text-[11px] font-semibold ${
                       o.cls === 'warn' ? 'bg-[var(--warnbg)] text-[var(--warn)]' : 'bg-[var(--badbg)] text-[var(--bad)]'
                     }`}
                   >
-                    {o.badge}
+                    {o.ids.length > 0 ? '후보 연결 없음' : 'ID 미확인'}
                   </span>
                 </div>
               </div>
             ))}
+            {shownOrphans.length === 0 && <p className="p-6 text-[13px] text-[var(--dim)]">검색 결과가 없습니다.</p>}
           </div>
         </>
       )}

@@ -34,3 +34,30 @@ it('답변 대기와 이력을 구분하고 조사 요청을 복사할 수 없�
     host.remove()
   }
 })
+
+it('접힌 보고서보다 앞에 조건부 판단과 필수요건 차이를 보이고 오래된 후보 메모는 숨긴다', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } })
+  client.setQueryData(['offers'], { collected_at: '2026-09-22', items: [{
+    id: '3', company: '제안회사', title: '백엔드', job_id: '123', received_at: '2026-09-21', status: '대기',
+    status_code: 'OFFER', expires_at: '2999-01-01', offer_type: 'APPLY', offer_mode: '', active: true,
+    state: 'listed', rail: 'none', reason: '미등록', url: 'https://example.com/offer', job_url: '',
+    assessment: null, listed_scores: [35, 18, 20, 20, -5], report_name: 'wanted_offer_3', message: '',
+    review: '# 제안회사 · 백엔드\n\n조건부 지원 검토. Kubernetes 운영 경험을 확인하세요.\n\n조사일: 2026-09-22\n\n## 적합도와 요건\n\n| 항목 | 판단 |\n|---|---|\n| 필수요건 차이 | Kubernetes 사용 이력 없음. 클라우드는 기본 사용 수준 |',
+  }] })
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  try {
+    await act(async () => root.render(<QueryClientProvider client={client}><OffersPage /></QueryClientProvider>))
+    const card = host.querySelector('[data-slot="card"]:has(h2)')!
+    expect(card.textContent).toContain('조건부 지원 검토')
+    expect(card.textContent).toContain('필수요건 차이 · Kubernetes 사용 이력 없음')
+    expect(card.textContent).not.toContain('기존 후보 메모: 미등록')
+    expect(card.querySelector('details')?.open).toBe(false)
+    const visibleGap = [...card.querySelectorAll('p')].find((p) => p.textContent?.startsWith('필수요건 차이'))!
+    expect(visibleGap.compareDocumentPosition(card.querySelector('details')!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+  } finally {
+    await act(async () => root.unmount())
+    client.clear()
+  }
+})

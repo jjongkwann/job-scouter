@@ -1,4 +1,4 @@
-import { act } from 'react'
+import { act, StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { expect, test, vi } from 'vitest'
@@ -6,7 +6,7 @@ import { expect, test, vi } from 'vitest'
 import * as api from '@/lib/api'
 import CandidatesPage from './page'
 
-test('saved filters remain after detail return and the requested candidate can be found', async () => {
+test('StrictMode에서도 상세 복귀 후 검색·정렬·필터를 유지하고 요청 실패 시 선택을 보존한다', async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   const values = new Map<string, string>()
   const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value), removeItem: (key: string) => values.delete(key) }
@@ -16,7 +16,7 @@ test('saved filters remain after detail return and the requested candidate can b
   const scroll = vi.fn()
   Element.prototype.scrollIntoView = scroll
   window.history.replaceState({}, '', '/candidates?candidate=c1')
-  localStorage.setItem('candidates-view', JSON.stringify({ f: { rep: 'bad' }, sort: 'due' }))
+  localStorage.setItem('candidates-view', JSON.stringify({ f: { rep: 'bad' }, sort: 'due', q: '데이터' }))
   const candidate: api.Candidate = {
     id: 'c1', company: '테스트회사', title: 'AI 개발자', url: 'https://example.com/job', src: 'wanted',
     scores: [30, 20, 20, 15, 0], total: 85, tier: 't1', rep: null, rep_key: 'none', rep_label: '정보 없음', rep_note: '업무 경험 적합',
@@ -30,25 +30,56 @@ test('saved filters remain after detail return and the requested candidate can b
   qc.setQueryData(['candidates'], candidates)
   qc.setQueryData(['dashboard'], dashboard)
   vi.spyOn(api, 'get').mockImplementation(async (path) => path === '/candidates' ? candidates : dashboard)
-  const publish = vi.spyOn(api, 'post').mockResolvedValue({ workflow_id: 'publish-1' })
+  const publish = vi.spyOn(api, 'post').mockRejectedValueOnce(new api.ApiError(503, '일시적 오류')).mockResolvedValue({ workflow_id: 'publish-1' })
   const host = document.createElement('div')
   document.body.append(host)
   const root = createRoot(host)
   try {
-    await act(async () => root.render(<QueryClientProvider client={qc}><CandidatesPage /></QueryClientProvider>))
-    expect(host.textContent).toContain('돌아온 공고가 현재 필터에 보이지 않습니다')
+    await act(async () => root.render(<StrictMode><QueryClientProvider client={qc}><CandidatesPage /></QueryClientProvider></StrictMode>))
+    expect(host.textContent).toContain('돌아온 공고가 현재 검색·필터에 보이지 않습니다')
     expect([...host.querySelectorAll('select')].find((s) => s.value === 'bad')).toBeDefined()
+    expect(host.querySelector<HTMLInputElement>('input[type="search"]')?.value).toBe('데이터')
     await act(async () => (host.querySelector('button.page-link') as HTMLButtonElement).click())
+    let search = host.querySelector<HTMLInputElement>('input[type="search"]')!
+    expect(search.value).toBe('')
     expect(host.querySelector('#candidate-c1')).not.toBeNull()
     expect(host.textContent).toContain('등록 메모 · 업무 경험 적합')
     expect(scroll).toHaveBeenCalled()
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(search, '테스트회사')
+      search.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(host.textContent).toContain('표시 2 / 전체 2건')
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(search, 'c2')
+      search.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(host.textContent).toContain('표시 1 / 전체 2건')
+    expect(host.querySelector('#candidate-c1')).toBeNull()
+    expect(host.querySelector('#candidate-c2')).not.toBeNull()
+    expect(JSON.parse(localStorage.getItem('candidates-view')!).q).toBe('c2')
+    // 상세 화면으로 떠났다가 돌아오는 마운트 과정을 재현한다.
+    await act(async () => root.render(null))
+    await act(async () => root.render(<StrictMode><QueryClientProvider client={qc}><CandidatesPage /></QueryClientProvider></StrictMode>))
+    search = host.querySelector<HTMLInputElement>('input[type="search"]')!
+    expect(search.value).toBe('c2')
+    expect([...host.querySelectorAll('select')].find((s) => s.value === 'due')).toBeDefined()
+    expect(host.textContent).toContain('표시 1 / 전체 2건')
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(search, '')
+      search.dispatchEvent(new Event('input', { bubbles: true }))
+    })
     const checkboxes = host.querySelectorAll<HTMLElement>('[role="checkbox"][aria-label$=" 선택"]')
     await act(async () => { checkboxes[0].click(); checkboxes[1].click() })
     const exclude = [...host.querySelectorAll('button')].find((b) => b.textContent === '2건 후보에서 제외')!
-    await act(async () => exclude.click())
+    await act(async () => { exclude.click(); await new Promise((resolve) => setTimeout(resolve, 0)) })
     expect(publish).toHaveBeenCalledWith('/publish', { ids: [], rejects: [
       { id: 'c1', why: '후보목록에서 삭제' }, { id: 'c2', why: '후보목록에서 삭제' },
     ] })
+    expect(publish).toHaveBeenCalledTimes(1)
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('일시적 오류')
+    expect(host.textContent).toContain('2건 선택')
+    expect(host.textContent).toContain('후보 목록 새로고침')
   } finally {
     await act(async () => root.unmount())
     host.remove()

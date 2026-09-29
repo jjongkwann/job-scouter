@@ -16,18 +16,29 @@ const DOC_LABELS: Record<string, string> = {
   '4_포트폴리오_구성.md': '포트폴리오 구성',
 }
 
-export function DocTabs({ docs, empty }: { docs: Record<string, string>; empty: ReactNode }) {
+export function DocTabs({ docs, empty, value, onValueChange }: {
+  docs: Record<string, string>; empty: ReactNode; value?: string; onValueChange?: (file: string) => void
+}) {
   const files = Object.keys(docs)
   const [tab, setTab] = useState('')
-  // 초안이 도는 동안 files가 비었다가 채워진다 — 고른 문서가 아직/이미 없으면 첫 문서로
-  const cur = files.includes(tab) ? tab : (files[0] ?? '')
+  const selected = value ?? tab
+  // 폴더를 바꾸어 선택한 문서가 없을 때는 이유를 알리고 첫 문서를 대신 연다.
+  const cur = files.includes(selected) ? selected : (files[0] ?? '')
   const missing = APP_FILES.filter((f) => !files.includes(f))
 
   if (!cur)
-    return <Card className="rounded-[9px] p-8 text-center text-[13px] leading-[1.7] text-[var(--dim)]">{empty}</Card>
+    return <Card className="rounded-[9px] p-8 text-center text-[13px] leading-[1.7] text-[var(--dim)]">
+      {selected && <p role="status">이 폴더에는 {DOC_LABELS[selected] ?? selected} 문서가 없습니다.</p>}
+      {empty}
+    </Card>
 
   return (
-    <Tabs value={cur} onValueChange={(v) => setTab(String(v))}>
+    <Tabs value={cur} onValueChange={(v) => (onValueChange ?? setTab)(String(v))}>
+      {selected && !files.includes(selected) && (
+        <p role="status" className="notice text-[var(--warn)]">
+          이 폴더에는 {DOC_LABELS[selected] ?? selected} 문서가 없습니다. 대신 {DOC_LABELS[cur] ?? cur} 문서를 표시합니다.
+        </p>
+      )}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <span className="text-[12px] text-[var(--dim)]">초안 문서</span>
         <TabsList variant="line" className="h-auto max-w-full flex-wrap justify-start gap-x-3 gap-y-2 p-0">

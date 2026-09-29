@@ -30,17 +30,7 @@ export default function ResumePage() {
     >
       {newChat.error && <p role="alert" className="notice text-[var(--bad)]">이력서 수정 대화를 시작하지 못했습니다: {newChat.error.message}</p>}
       <div className="grid grid-cols-1 items-start gap-4 min-[1280px]:grid-cols-[minmax(0,1fr)_240px]">
-        <div>
-          {q.isPending && <Skeleton className="h-96 w-full" />}
-          {q.error && (
-            <Card className="mb-3 rounded-lg border border-[var(--rail-bad)] bg-[var(--badbg)] px-3.5 py-3 text-[12.5px] text-[var(--bad)] ring-0">
-              이력서를 불러오지 못했습니다 — {q.error.message}
-            </Card>
-          )}
-          {q.data && <Markdown text={q.data.markdown} />}
-        </div>
-
-        <div>
+        <div className="min-[1280px]:col-start-2 min-[1280px]:row-start-1">
           <Card className="mb-3 gap-2 rounded-lg bg-[var(--row)] px-3.5 py-3 text-[13px] ring-[var(--line)]">
             <h3 className="m-0 text-[13px] font-semibold text-[var(--dim)]">진행 중 대화</h3>
             {q.data?.chats.length ? (
@@ -49,7 +39,7 @@ export default function ResumePage() {
                   <Link
                     key={c.sid}
                     href={`/resume/chat/${c.sid}?key=${encodeURIComponent(c.target)}`}
-                    className="block rounded-md px-2 py-1.5 text-[13px] text-[var(--fg)] no-underline hover:bg-[var(--hov)]"
+                    className="flex min-h-11 items-center rounded-md px-2 py-1.5 text-[13px] text-[var(--fg)] no-underline hover:bg-[var(--hov)]"
                   >
                     {c.target} · {c.n}턴
                   </Link>
@@ -83,6 +73,15 @@ export default function ResumePage() {
               사실베이스는 사람이 검증한 문장만 담습니다. 평가와 초안 작성의 근거가 됩니다. <Link href="/docs" className="text-[var(--link)] underline">사실베이스 확인</Link>
             </p>
           </Card>
+        </div>
+        <div className="min-[1280px]:col-start-1 min-[1280px]:row-start-1">
+          {q.isPending && <Skeleton className="h-96 w-full" />}
+          {q.error && (
+            <Card className="mb-3 rounded-lg border border-[var(--rail-bad)] bg-[var(--badbg)] px-3.5 py-3 text-[12.5px] text-[var(--bad)] ring-0">
+              이력서를 불러오지 못했습니다 — {q.error.message}
+            </Card>
+          )}
+          {q.data && <Markdown text={q.data.markdown} />}
         </div>
       </div>
     </Page>

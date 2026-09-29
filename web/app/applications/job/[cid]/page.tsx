@@ -1,5 +1,5 @@
 'use client'
-import { use } from 'react'
+import { use, useEffect } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -28,18 +28,19 @@ const REP_CLS: Record<string, string> = {
 }
 const AXES = ['스택', '도메인', '레벨', '역할']
 
-export default function JobApplicationPage({ params, searchParams }: { params: Promise<{ cid: string }>; searchParams: Promise<{ folder?: string }> }) {
+export default function JobApplicationPage({ params, searchParams }: { params: Promise<{ cid: string }>; searchParams: Promise<{ folder?: string; doc?: string }> }) {
   const { cid } = use(params)
-  const { folder: requestedFolder } = use(searchParams)
+  const { folder: requestedFolder, doc: requestedDoc = '' } = use(searchParams)
   const router = useRouter()
   const qc = useQueryClient()
-  // 같은 공고를 가리키는 폴더가 여럿일 때 URL로 선택을 보존한다. 비면 서버 기본(원본)
+  // 같은 공고를 가리키는 폴더가 여럿일 때 URL로 선택을 보존한다. 비면 서버 기본 폴더.
   const folderSlug = requestedFolder ?? ''
 
-  const { data, isPending, error } = useQuery({
+  const { data, isPending, isPlaceholderData, error } = useQuery({
     queryKey: ['application-job', cid, folderSlug],
     queryFn: () =>
       get<JobApplication>(`/applications/job/${encodeURIComponent(cid)}${folderSlug ? `?folder=${encodeURIComponent(folderSlug)}` : ''}`),
+    placeholderData: (previous, previousQuery) => previousQuery?.queryKey[1] === cid ? previous : undefined,
     // 초안이 도는 동안만 짧게 폴링한다 — 끝나면 SSE 토스트와 함께 무효화되고 멈춘다
     refetchInterval: (q) => (q.state.data?.drafting ? 3000 : false),
   })
@@ -52,6 +53,15 @@ export default function JobApplicationPage({ params, searchParams }: { params: P
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.detail : String(e)),
   })
+
+  const docUrl = (folder: string, doc: string) =>
+    `/applications/job/${encodeURIComponent(cid)}?folder=${encodeURIComponent(folder)}${doc ? `&doc=${encodeURIComponent(doc)}` : ''}`
+
+  useEffect(() => {
+    if (requestedFolder && requestedDoc && data?.folder?.slug === requestedFolder && !isPlaceholderData) {
+      document.getElementById('application-docs')?.scrollIntoView({ block: 'start' })
+    }
+  }, [data?.folder?.slug, isPlaceholderData, requestedDoc, requestedFolder])
 
   if (error)
     return (
@@ -73,14 +83,14 @@ export default function JobApplicationPage({ params, searchParams }: { params: P
   const { candidate: c, folder, folders, others, docs, drafting } = data
   const experienceBlocked = c.experience_review_required || c.experience_excluded
   const src = c.src === 'wanted' ? '원티드' : c.src === 'jumpit' ? '점핏' : c.src === 'remember' ? '리멤버' : '공식 채용'
-  const status = drafting ? '초안 생성 중' : folder?.docs.length ? `초안 ${folder.docs.length}/5종 생성` : '초안 없음'
-  const extra = folder ? folder.files.filter((f) => !APP_FILES.includes(f)) : []
+  const status = isPlaceholderData ? '폴더 확인 중' : drafting ? '초안 생성 중' : folder?.docs.length ? `초안 ${folder.docs.length}/5종 생성` : '초안 없음'
+  const extra = folder && !isPlaceholderData ? folder.files.filter((f) => !APP_FILES.includes(f)) : []
 
   return (
     <Page
       title={c.company}
       back={{ href: '/applications', label: '공고별 초안' }}
-      sub={folder ? `초안 ${folder.docs.length}/5종 생성 · 최종 수정 ${folder.mtime}` : '이 공고에 연결된 초안이 아직 없습니다.'}
+      sub={isPlaceholderData ? '선택한 폴더를 불러오는 중입니다.' : folder ? `초안 ${folder.docs.length}/5종 생성 · 최종 수정 ${folder.mtime}` : '이 공고에 연결된 초안이 아직 없습니다.'}
     >
       <div
         className={`surface rail mb-4 min-w-0 p-4 ${RAIL[c.rep_key]}`}
@@ -111,7 +121,7 @@ export default function JobApplicationPage({ params, searchParams }: { params: P
           </div>
         </div>
 
-        <div className="grid grid-cols-[250px_96px_158px_minmax(0,1fr)] gap-5 py-3 max-[1280px]:grid-cols-1 max-[1280px]:gap-3">
+        <div className="grid grid-cols-[250px_96px_158px_minmax(0,1fr)] gap-5 py-3 max-[1280px]:grid-cols-2 max-[640px]:grid-cols-1 max-[1280px]:gap-3">
           <div>
             <div className="mb-1 text-[12px] text-[var(--dim)]">적합도</div>
             <Fit total={c.total} tier={c.tier} />
@@ -151,7 +161,7 @@ export default function JobApplicationPage({ params, searchParams }: { params: P
         {experienceBlocked && <p className="text-[13px] text-[var(--warn)]">{c.experience_review_required ? `경력 ${c.career} · AI 재검토 대기` : `경력 검토 제외 · ${c.experience_reason}`} — 기존 문서는 열람할 수 있으며 새 초안 생성은 보류됩니다.</p>}
         {draft.error && <p role="alert" className="notice text-[var(--bad)]">초안 생성을 시작하지 못했습니다: {draft.error instanceof ApiError ? draft.error.detail : String(draft.error)}</p>}
         <div className="flex flex-wrap items-center gap-2 pt-[11px]">
-          {folder && (
+          {folder && !isPlaceholderData && (
             <span className="mr-auto text-[12px] text-[var(--dim)]">
               초안 {folder.docs.length}/5종 · 최종 수정 {folder.mtime}
             </span>
@@ -175,11 +185,11 @@ export default function JobApplicationPage({ params, searchParams }: { params: P
 
       <JobApplicationFiles cid={cid} />
       <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_260px] items-start gap-4 max-[1280px]:grid-cols-1">
-        <div>
+        <div id="application-docs" className="scroll-mt-4">
           {folders.length > 1 && folder && (
             <div className="mb-2 flex flex-wrap items-center gap-2 text-[12px] text-[var(--dim)]">
               <span>폴더</span>
-              <ToggleGroup value={[folder.slug]} onValueChange={(v) => v[0] && router.replace(`/applications/job/${encodeURIComponent(cid)}?folder=${encodeURIComponent(String(v[0]))}`)}>
+              <ToggleGroup value={[isPlaceholderData ? requestedFolder || folder.slug : folder.slug]} onValueChange={(v) => v[0] && router.replace(docUrl(String(v[0]), requestedDoc || Object.keys(docs)[0] || ''), { scroll: false })}>
                 {folders.map((f) => (
                   <ToggleGroupItem
                     key={f.slug}
@@ -188,25 +198,31 @@ export default function JobApplicationPage({ params, searchParams }: { params: P
                     aria-label={`폴더 ${f.slug}`}
                     className="rounded-full border border-[var(--line)] bg-[var(--row)] px-2.5 text-[12px] hover:border-[var(--dim)] aria-pressed:border-[var(--fg)] aria-pressed:bg-[var(--fg)] aria-pressed:text-white"
                   >
-                    {f.slug.endsWith('_draft') ? '재생성본' : '원본'} · {f.mtime}
+                    {f.slug} · {f.mtime}
                   </ToggleGroupItem>
                 ))}
               </ToggleGroup>
-              <span>재생성 초안은 원본과 별도로 보관됩니다.</span>
             </div>
           )}
-          <DocTabs
-            docs={docs}
-            empty={
-              <>
-                아직 문서가 없습니다.
-                <br />
-                <span className="text-[12px]">
-                  초안 생성은 몇 분 걸립니다. 공고·맞춤 이력서·자기소개서·면접 준비·포트폴리오 구성 문서가 이 자리에 채워집니다.
-                </span>
-              </>
-            }
-          />
+          <div className="relative" aria-busy={isPlaceholderData}>
+            {isPlaceholderData && <p role="status" className="absolute top-0 left-0 text-[13px] text-[var(--dim)]">선택한 폴더의 문서를 불러오는 중입니다.</p>}
+            <div className={isPlaceholderData ? 'invisible' : ''}>
+              <DocTabs
+                docs={docs}
+                value={requestedDoc}
+                onValueChange={(doc) => router.replace(docUrl(requestedFolder || folder?.slug || '', doc), { scroll: false })}
+                empty={
+                  <>
+                    아직 문서가 없습니다.
+                    <br />
+                    <span className="text-[12px]">
+                      초안 생성은 몇 분 걸립니다. 공고·맞춤 이력서·자기소개서·면접 준비·포트폴리오 구성 문서가 이 자리에 채워집니다.
+                    </span>
+                  </>
+                }
+              />
+            </div>
+          </div>
         </div>
         <div>
           {others.length > 0 && (

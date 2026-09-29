@@ -24,7 +24,7 @@ test('grouped postings retain source links and independent publish decisions', a
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   qc.setQueryData(['dashboard'], dashboard)
   vi.spyOn(api, 'get').mockResolvedValue(dashboard)
-  const publish = vi.spyOn(api, 'post').mockResolvedValue({ workflow_id: 'publish-1' })
+  const publish = vi.spyOn(api, 'post').mockRejectedValueOnce(new api.ApiError(503, '접수 응답 실패')).mockResolvedValue({ workflow_id: 'publish-1' })
   const host = document.createElement('div')
   document.body.append(host)
   const root = createRoot(host)
@@ -43,8 +43,21 @@ test('grouped postings retain source links and independent publish decisions', a
     expect(approve[1].getAttribute('aria-pressed')).toBe('true')
     await act(async () => reject[0].click())
     const submit = [...host.querySelectorAll('button')].find((b) => b.textContent === '2건 선택 처리')!
-    await act(async () => submit.click())
+    await act(async () => { submit.click(); await new Promise((resolve) => setTimeout(resolve, 0)) })
     expect(publish).toHaveBeenCalledWith('/publish', { ids: ['j2'], rejects: [{ id: '1', why: '적합도 낮음' }] })
+    expect(publish).toHaveBeenCalledTimes(1)
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('접수 응답 실패')
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('요청 접수 여부가 불분명')
+    expect(host.textContent).toContain('2건 선택')
+    expect(reject[0].getAttribute('aria-pressed')).toBe('true')
+    await act(async () => {
+      qc.setQueryData(['dashboard'], { ...dashboard, publish: {
+        id: 'publish-1', status: 'FAILED', start: '2026-09-29 12:00', ids: ['j2'], reject_ids: ['1'], error: '초안 생성 실패',
+      } })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(host.textContent).toContain('마지막 후보 처리 실패')
+    expect(host.textContent).toContain('선택 처리 요청에 문제가 생겼습니다')
   } finally {
     await act(async () => root.unmount())
     host.remove()

@@ -46,7 +46,10 @@ export default function SlugApplicationPage({ params }: { params: Promise<{ slug
       back={{ href: '/applications', label: '공고별 초안' }}
       sub={
         <>
-          {slug} · 초안 {data.folder.docs.length}/5종 · 후보목록의 공고와 연결되지 않았습니다. 문서에 공고 원문 링크를 적으면 이어집니다.
+          {slug} · 초안 {data.folder.docs.length}/5종 ·{' '}
+          {data.folder.ids.length > 0
+            ? `문서에서 확인된 공고 ID ${data.folder.ids.join(', ')}가 현재 후보목록에 없어 연결되지 않았습니다.`
+            : '문서에서 연결할 공고 ID를 확인하지 못해 현재 후보와 연결되지 않았습니다.'}
         </>
       }
       source={`초안 폴더 ${slug}`}

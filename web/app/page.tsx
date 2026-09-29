@@ -99,6 +99,11 @@ export default function Home() {
           마지막 후보 처리 실패 ({pub.start}): {pub.error} 등재·제외는 이미 반영됐을 수 있습니다. 후보 목록에서 상태를 확인하고 필요한 초안을 다시 만드세요.
         </Card>
       )}
+      {submit.isError && (
+        <Card className="mb-3 rounded-[9px] border-[var(--rail-bad)] bg-[var(--badbg)] px-[14px] py-[10px] text-[12.5px] leading-[1.5] text-[var(--bad)]" role="alert">
+          선택 처리 요청에 문제가 생겼습니다: {submit.error instanceof ApiError ? submit.error.detail : String(submit.error)}. 선택과 제외 사유는 남아 있습니다. 요청 접수 여부가 불분명할 수 있으므로 <button className="page-link" onClick={() => qc.invalidateQueries({ queryKey: ['dashboard'] })}>처리 상태 새로고침</button>과 <Link href="/candidates" className="page-link">후보 목록</Link>을 확인한 뒤 필요한 항목만 다시 처리하세요.
+        </Card>
+      )}
 
       <div className="surface mb-3 divide-y divide-[var(--line)]">
 

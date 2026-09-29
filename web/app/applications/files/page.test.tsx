@@ -31,6 +31,8 @@ test('제출용 파일 목록은 기본본과 다운로드를 표시하고 중�
     expect(host.textContent).toContain('기본 이력서·포트폴리오')
     expect(host.textContent).toContain('같은 채용의 공고 2건 연결')
     expect(host.textContent).toContain('실제 지원 여부는 기록되어 있지 않습니다')
+    expect(host.textContent).toContain('기본본은 항상 표시')
+    expect(host.querySelector('#application-files-search')!.compareDocumentPosition(host.querySelector('a[href$="전체.zip"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(host.querySelectorAll('a[href="https://example.com/job"]')).toHaveLength(2)
     expect(host.querySelector('a[href$="이력서.pdf"]')?.getAttribute('target')).toBe('_blank')
     expect(host.querySelector('a[href$="전체.zip"]')).not.toBeNull()

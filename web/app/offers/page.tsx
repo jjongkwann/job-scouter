@@ -16,6 +16,12 @@ import { Skeleton } from '@/components/ui/skeleton'
 const STATES = { unassessed: '평가 전', pending: '후보 승인 대기', listed: '후보 등록', excluded: '평가 제외', skipped: '후보에서 제외함', reviewed: '평가·조사 기록 있음' }
 const RAILS = { good: '괜찮음', warn: '주의', bad: '회피·사용자 제외', none: '정보 부족' }
 
+function reviewHighlights(review: string) {
+  const summary = review.replace(/^# [^\n]*\n/, '').trimStart().split(/\n\s*\n/)[0] || ''
+  const gap = review.match(/^\|\s*필수(?:요건)?\s*차이\s*\|\s*([^|\n]+)\s*\|\s*$/m)?.[1]?.trim() || ''
+  return { summary, gap }
+}
+
 export default function OffersPage() {
   const [filter, setFilter] = useState('active')
   const q = useQuery({ queryKey: ['offers'], queryFn: () => get<ReceivedOffers>('/offers'), refetchInterval: 10000 })
@@ -56,6 +62,7 @@ function OfferCard({ item }: { item: ReceivedOffer }) {
     }
   }
   const assessment = item.assessment
+  const { summary, gap } = reviewHighlights(item.review)
   return (
     <Card className={`gap-4 p-5 rail rail-${item.rail}`} >
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -71,10 +78,12 @@ function OfferCard({ item }: { item: ReceivedOffer }) {
           <Badge variant="outline">평판: {RAILS[item.rail]}</Badge>
         </div>
       </div>
+      {summary && <div className="offer-summary text-[13px] leading-relaxed"><p className="mb-1 font-medium">보고서 판단</p><Markdown text={summary} /></div>}
+      {gap && <p className="rounded-lg bg-[var(--warnbg)] px-3 py-2 text-[13px] leading-relaxed"><strong>필수요건 차이 · </strong>{gap}</p>}
       {assessment ? <div className="flex flex-wrap items-center gap-2 text-[13px] [&_a]:inline-flex [&_a]:min-h-11 [&_a]:items-center [&_a]:text-[var(--link)] [&_a]:underline"><span className="text-[var(--dim)]">적합도</span><div className="w-28"><Fit total={assessment.total} tier={assessment.tier} /></div><span>기존 공고 평가 · {assessment.judged_at || '날짜 미확인'}</span></div>
         : item.listed_scores ? <p className="text-sm">등록된 공고 적합도 {item.listed_scores.reduce((sum, score) => sum + score, 0)}점</p>
           : <p className="text-sm text-[var(--dim)]">{item.review ? '아래 보고서에서 적합도와 확인할 조건을 살펴보세요.' : item.job_id ? '공고 적합도 평가가 없습니다.' : '연결된 공고 없음 · 제안 상세의 직무 요건을 확인해야 합니다.'}</p>}
-      {item.reason && <p className="text-sm leading-relaxed">{item.state === 'listed' && '기존 후보 메모: '}{item.reason}</p>}
+      {item.reason && !(item.state === 'listed' && item.reason.trim() === '미등록') && <p className="text-sm leading-relaxed">{item.state === 'listed' && '기존 후보 메모: '}{item.reason}</p>}
       {assessment && assessment.quotes.length > 0 && <details className="text-sm"><summary className="cursor-pointer">평가 근거 인용</summary><ul className="mt-2 list-disc pl-5">{assessment.quotes.map((quote, i) => <li key={i}>{quote}</li>)}</ul></details>}
       <details className="text-sm"><summary className="cursor-pointer">받은 제안 원문</summary><p className="mt-2 whitespace-pre-wrap leading-relaxed">{item.message || '아직 상세 내용을 수집하지 않았습니다.'}</p></details>
       {item.review ? <><details className="text-sm"><summary className="cursor-pointer font-medium">평가·기업 조사 보고서 보기</summary><div className="mt-3"><Markdown text={item.review} /></div></details></>

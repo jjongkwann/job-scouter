@@ -19,6 +19,13 @@ export default function ApplicationFilesPage() {
       stats={data && [[data.stats.jobs, '공고별 파일 세트'], [data.stats.postings, '연결 공고'], [data.stats.documents, 'PDF·PPTX 파일']]}>
       {error && <p role="alert" className="text-[var(--bad)]">서류 목록을 불러오지 못했습니다: {error instanceof ApiError ? error.detail : String(error)}</p>}
       {isPending && <Skeleton className="h-48 w-full" />}
+      {jobs.length > 0 && (
+        <div className="mb-5">
+          <label htmlFor="application-files-search" className="mb-1.5 block text-[13px] font-medium">회사·직무·공고 ID 검색</label>
+          <Input id="application-files-search" type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="회사, 직무 또는 공고 ID" className="mb-2 max-w-2xl" />
+          <p className="text-[12px] text-[var(--dim)]" aria-live="polite">공고별 {matches.length} / {jobs.length}세트 · 기본본은 항상 표시</p>
+        </div>
+      )}
       {base && <div className="mb-5"><ApplicationFileCard pack={base} /></div>}
       {data?.bundle && (
         <a href={data.bundle.url} className="mb-5 inline-flex min-h-11 max-w-full items-center rounded-xl border border-[var(--line)] px-4 py-2 text-[13px] font-semibold no-underline hover:border-[var(--link)]">
@@ -27,9 +34,6 @@ export default function ApplicationFilesPage() {
       )}
       {jobs.length > 0 && (
         <>
-          <label htmlFor="application-files-search" className="mb-1.5 block text-[13px] font-medium">회사·직무·공고 ID 검색</label>
-          <Input id="application-files-search" type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="회사, 직무 또는 공고 ID" className="mb-2 max-w-2xl" />
-          <p className="mb-3 text-[12px] text-[var(--dim)]" aria-live="polite">{matches.length} / {jobs.length}세트</p>
           <div className="grid grid-cols-2 items-start gap-3 max-[1060px]:grid-cols-1">
             {matches.map((pack) => <ApplicationFileCard key={pack.id} pack={pack} />)}
           </div>

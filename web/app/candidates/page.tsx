@@ -13,6 +13,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 
 const RAIL: Record<string, string> = { good: 'rail-good', warn: 'rail-warn', bad: 'rail-bad', none: '' }
@@ -41,6 +42,7 @@ export default function CandidatesPage() {
   const qc = useQueryClient()
   const [f, setF] = useState<Filters>(ALL)
   const [sort, setSort] = useState<SortKey>('rec')
+  const [q, setQ] = useState('')
   const [picked, setPicked] = useState<string[]>([])
   const [restored, setRestored] = useState(false)
   const [target, setTarget] = useState<string | null>(null)
@@ -54,6 +56,7 @@ export default function CandidatesPage() {
       const s = JSON.parse(localStorage.getItem(STORE) ?? '{}')
       if (s.f) setF({ ...ALL, ...s.f })
       if (s.sort) setSort(s.sort)
+      if (typeof s.q === 'string') setQ(s.q)
     } catch {
       /* 저장값이 깨졌으면 기본값 */
     }
@@ -62,12 +65,13 @@ export default function CandidatesPage() {
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [])
   useEffect(() => {
+    if (!restored) return
     try {
-      localStorage.setItem(STORE, JSON.stringify({ f, sort }))
+      localStorage.setItem(STORE, JSON.stringify({ f, sort, q }))
     } catch {
       /* 프라이빗 모드 등 — 저장 못 해도 화면은 동작한다 */
     }
-  }, [f, sort])
+  }, [f, sort, q, restored])
 
   const { data, isPending, error } = useQuery({
     queryKey: ['candidates'],
@@ -92,9 +96,12 @@ export default function CandidatesPage() {
   })
   const busy = remove.isPending || dashboard?.publish?.status === 'RUNNING'
   const rows = useMemo(() => data?.rows ?? [], [data])
-  const review = useMemo(() => applyFilters(sortRows(rows.filter((c) => !isDead(c) && (c.experience_review_required || c.experience_excluded)), sort), f, false), [rows, sort, f])
-  const live = useMemo(() => applyFilters(sortRows(rows.filter((c) => !isDead(c) && !c.experience_review_required && !c.experience_excluded), sort), f, true), [rows, sort, f])
-  const dead = useMemo(() => applyFilters(sortRows(rows.filter(isDead), sort), f, false), [rows, sort, f])
+  const search = q.trim().toLowerCase()
+  const searched = useMemo(() => rows.filter((c) => !search || [c.company, c.title, c.id].some((v) => v.toLowerCase().includes(search))), [rows, search])
+  const review = useMemo(() => applyFilters(sortRows(searched.filter((c) => !isDead(c) && (c.experience_review_required || c.experience_excluded)), sort), f, false), [searched, sort, f])
+  const live = useMemo(() => applyFilters(sortRows(searched.filter((c) => !isDead(c) && !c.experience_review_required && !c.experience_excluded), sort), f, true), [searched, sort, f])
+  const dead = useMemo(() => applyFilters(sortRows(searched.filter(isDead), sort), f, false), [searched, sort, f])
+  const visibleCount = live.length + review.length + dead.length
   const targetExists = rows.some((c) => c.id === target)
   const visible = [...live, ...review, ...dead].some((c) => c.id === target)
   useEffect(() => {
@@ -169,6 +176,11 @@ export default function CandidatesPage() {
       )}
 
       <div className="toolbar mb-3 flex flex-wrap gap-3 p-3">
+        <label className="w-full text-[12px] text-[var(--dim)]">
+          회사·직무·공고 ID 검색
+          <Input className="mt-1 min-h-11 text-[16px]" type="search" value={q} onChange={(e) => { setQ(e.target.value); setTarget(null) }} placeholder="회사, 직무 또는 공고 ID" />
+        </label>
+        <p className="m-0 w-full text-[12px] text-[var(--dim)]" role="status">표시 {visibleCount} / 전체 {rows.length}건</p>
         <Group label="정렬" value={sort} options={SORTS} onChange={(v) => setSort(v as SortKey)} />
         <Group label="평판" value={f.rep} options={[['all', '전체'], ['good', '괜찮음'], ['warn', '주의'], ['bad', '회피'], ['none', '정보 없음']]} onChange={(v) => setF({ ...f, rep: v as Filters['rep'] })} />
         <Group label="마감" value={f.due} options={[['all', '전체'], ['soon', 'D-7 이내'], ['dated', '마감일 있음'], ['always', '상시']]} onChange={(v) => setF({ ...f, due: v as Filters['due'] })} />
@@ -181,7 +193,13 @@ export default function CandidatesPage() {
           </div>
         </details>
       </div>
-      {target && !visible && data && <div className="notice mb-3 p-3 text-[13px]" role="status">{targetExists ? <>돌아온 공고가 현재 필터에 보이지 않습니다. <button className="page-link" onClick={() => setF(ALL)}>필터 초기화</button></> : '돌아온 공고가 현재 후보 목록에 없습니다.'}</div>}
+      {target && !visible && data && <div className="notice mb-3 p-3 text-[13px]" role="status">{targetExists ? <>돌아온 공고가 현재 검색·필터에 보이지 않습니다. <button className="page-link" onClick={() => { setF(ALL); setQ('') }}>검색·필터 초기화</button></> : '돌아온 공고가 현재 후보 목록에 없습니다.'}</div>}
+
+      {remove.isError && (
+        <Card className="mb-3 rounded-[9px] border-[var(--rail-bad)] bg-[var(--badbg)] px-[14px] py-[10px] text-[12.5px] leading-[1.5] text-[var(--bad)]" role="alert">
+          선택한 {remove.variables?.length ?? selected.length}건의 후보 제외 요청에 문제가 생겼습니다: {remove.error instanceof ApiError ? remove.error.detail : String(remove.error)}. 선택은 남아 있습니다. 요청 접수 여부가 불분명할 수 있으므로 <button className="page-link" onClick={() => qc.invalidateQueries({ queryKey: ['candidates'] })}>후보 목록 새로고침</button>과 처리 상태를 확인한 뒤 필요한 항목만 다시 선택해 처리하세요.
+        </Card>
+      )}
 
       {(selected.length > 0 || busy) && <div className="action-bar surface mb-3 flex flex-wrap items-center gap-3 p-3 text-[13px]">
         <span aria-live="polite">{selected.length}건 선택</span>
@@ -203,7 +221,7 @@ export default function CandidatesPage() {
           ))
         ) : rows.length === 0 ? (
           <div className="empty-state">등록된 후보가 없습니다. 검토함에서 공고를 등록하면 여기에 표시됩니다.</div>
-        ) : live.length === 0 ? (
+        ) : visibleCount === 0 ? (
           <div className="empty-state">조건에 맞는 공고가 없습니다.</div>
         ) : (
           live.map((c) => <Row key={c.id} c={c} app={data?.apps[c.id]} busy={busy} picked={picked.includes(c.id)} onSelect={selectCandidate} />)

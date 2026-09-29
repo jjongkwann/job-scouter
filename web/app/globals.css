@@ -132,6 +132,8 @@
 .tabular { font-variant-numeric: tabular-nums; }
 
 .doc { min-width: 0; margin-bottom: 16px; padding: 28px 32px; border: 1px solid var(--line); border-radius: 8px; background: var(--row); overflow-wrap: anywhere; font-size: 16px; line-height: 1.8; }
+.offer-summary .doc { margin: 0; padding: 0; border: 0; background: transparent; font-size: 13px; }
+.offer-summary .doc p { margin-bottom: 0; }
 .doc h2 { font-size: 20px; font-weight: 600; margin: 28px 0 12px; line-height: 1.45; }
 .doc h2:first-child { margin-top: 0; }
 .doc h3 { font-size: 17px; font-weight: 600; margin: 24px 0 8px; }
