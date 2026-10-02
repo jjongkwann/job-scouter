@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
+import { ChevronDown, ExternalLink } from 'lucide-react'
 
 import { ApiError, get, post, type Candidate, type Candidates, type Dashboard } from '@/lib/api'
 import { ALL, AXES, applyFilters, isDead, sortRows, type Filters, type SortKey } from '@/lib/candidates'
@@ -19,6 +20,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 const RAIL: Record<string, string> = { good: 'rail-good', warn: 'rail-warn', bad: 'rail-bad', none: '' }
 const STORE = 'candidates-view'
 const SCROLL_STORE = 'candidates-scroll'
+const ROW_GRID = 'grid grid-cols-[24px_minmax(0,1fr)_44px] items-center gap-x-3 md:grid-cols-[24px_minmax(0,1fr)_72px_100px_88px_44px]'
 
 const SORTS: [SortKey, string][] = [
   ['rec', '추천순'],
@@ -142,24 +144,14 @@ export default function CandidatesPage() {
     ),
   ]
 
-  const n = (p: (c: Candidate) => boolean) => rows.filter(p).length
+  const filterCount = Object.entries(f).filter(([key, value]) => value !== ALL[key as keyof Filters]).length
+  const dueSoon = rows.filter((c) => !isDead(c) && c.days_left !== null && c.days_left <= 7).length
 
   return (
     <Page
       title={`채용 후보 ${rows.length}건`}
-      sub="추천도는 검토 순서의 보조값입니다. 지원 자격과 근무 조건은 각 공고의 원문을 확인하세요."
+      sub={`회사 ${new Set(rows.map((c) => c.company)).size}곳 · 7일 내 마감 ${dueSoon}건`}
       source={<code>jobfeed/candidates.json</code>}
-      stats={[
-        [rows.length, '전체 공고'],
-        [new Set(rows.map((c) => c.company)).size, '회사'],
-        [n((c) => c.days_left !== null && c.days_left >= 0 && c.days_left <= 7), '마감 D-7 이내'],
-        [n((c) => c.total >= 80 && !c.experience_review_required && !c.experience_excluded), '적합도 80+'],
-        [n((c) => !isDead(c) && c.experience_review_required), 'AI 경력 재검토'],
-        [n((c) => c.rep_key === 'good'), '평판 괜찮음'],
-        [n((c) => c.rep_key === 'bad'), '평판 회피'],
-        [n((c) => c.rep_key === 'none'), '평판 정보 없음'],
-        [n((c) => c.tags.includes('domain')), '하드웨어·제조'],
-      ]}
     >
       {error && (
         <Card className="mb-3 rounded-[9px] border-[var(--rail-bad)] bg-[var(--badbg)] px-[14px] py-[10px] text-[12.5px] text-[var(--bad)]">
@@ -175,23 +167,28 @@ export default function CandidatesPage() {
         </Card>
       )}
 
-      <div className="toolbar mb-3 flex flex-wrap gap-3 p-3">
-        <label className="w-full text-[12px] text-[var(--dim)]">
-          회사·직무·공고 ID 검색
-          <Input className="mt-1 min-h-11 text-[16px]" type="search" value={q} onChange={(e) => { setQ(e.target.value); setTarget(null) }} placeholder="회사, 직무 또는 공고 ID" />
-        </label>
-        <p className="m-0 w-full text-[12px] text-[var(--dim)]" role="status">표시 {visibleCount} / 전체 {rows.length}건</p>
-        <Group label="정렬" value={sort} options={SORTS} onChange={(v) => setSort(v as SortKey)} />
-        <Group label="평판" value={f.rep} options={[['all', '전체'], ['good', '괜찮음'], ['warn', '주의'], ['bad', '회피'], ['none', '정보 없음']]} onChange={(v) => setF({ ...f, rep: v as Filters['rep'] })} />
-        <Group label="마감" value={f.due} options={[['all', '전체'], ['soon', 'D-7 이내'], ['dated', '마감일 있음'], ['always', '상시']]} onChange={(v) => setF({ ...f, due: v as Filters['due'] })} />
-        <details className="w-full text-[13px]">
-          <summary className="cursor-pointer text-[var(--link)] underline underline-offset-2">추가 필터</summary>
-          <div className="mt-3 flex flex-wrap gap-3">
-            <Group label="상태" value={f.st} options={[['all', '전체'], ['bookmark', '북마크'], ['prep', '지원자료 있음'], ['rejected', '탈락 이력'], ['domain', '하드웨어·제조']]} onChange={(v) => setF({ ...f, st: v as Filters['st'] })} />
-            <Group label="적합도" value={String(f.min)} options={[['0', '전체'], ['70', '70점 이상'], ['80', '80점 이상']]} onChange={(v) => setF({ ...f, min: Number(v) as Filters['min'] })} />
-            <Group label="통근" value={String(f.loc)} options={locOptions} onChange={(v) => setF({ ...f, loc: (v === 'all' ? 'all' : Number(v)) as Filters['loc'] })} />
-          </div>
-        </details>
+      <div className="mb-4">
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="min-w-0 basis-full text-[12px] text-[var(--dim)] sm:flex-1 sm:basis-0">
+            회사·직무·공고 ID 검색
+            <Input className="mt-1 min-h-11 text-[16px]" type="search" value={q} onChange={(e) => { setQ(e.target.value); setTarget(null) }} placeholder="회사, 직무 또는 공고 ID" />
+          </label>
+          <Group label="정렬" value={sort} options={SORTS} onChange={(v) => setSort(v as SortKey)} />
+          <p className="m-0 pb-3 text-[12px] text-[var(--dim)]" role="status">표시 {visibleCount} / 전체 {rows.length}건</p>
+        </div>
+        <div className="relative mt-2">
+          <details className="min-w-0 text-[13px]">
+            <summary className="min-h-11 pr-36 text-[var(--dim)]">필터{filterCount > 0 && ` · ${filterCount}개 적용`}</summary>
+            <div className="grid grid-cols-2 gap-3 rounded-lg border border-[var(--line)] bg-[var(--hov)] p-3 sm:flex sm:flex-wrap">
+              <Group label="평판" value={f.rep} options={[['all', '전체'], ['good', '괜찮음'], ['warn', '주의'], ['bad', '회피'], ['none', '정보 없음']]} onChange={(v) => setF({ ...f, rep: v as Filters['rep'] })} />
+              <Group label="마감" value={f.due} options={[['all', '전체'], ['soon', 'D-7 이내'], ['dated', '마감일 있음'], ['always', '상시']]} onChange={(v) => setF({ ...f, due: v as Filters['due'] })} />
+              <Group label="상태" value={f.st} options={[['all', '전체'], ['bookmark', '북마크'], ['prep', '지원자료 있음'], ['rejected', '탈락 이력'], ['domain', '하드웨어·제조']]} onChange={(v) => setF({ ...f, st: v as Filters['st'] })} />
+              <Group label="적합도" value={String(f.min)} options={[['0', '전체'], ['70', '70점 이상'], ['80', '80점 이상']]} onChange={(v) => setF({ ...f, min: Number(v) as Filters['min'] })} />
+              <Group label="통근" value={String(f.loc)} options={locOptions} onChange={(v) => setF({ ...f, loc: (v === 'all' ? 'all' : Number(v)) as Filters['loc'] })} />
+            </div>
+          </details>
+          {(q || filterCount > 0) && <Button className="absolute top-0 right-0" variant="ghost" size="sm" onClick={() => { setQ(''); setF(ALL) }}>검색·필터 초기화</Button>}
+        </div>
       </div>
       {target && !visible && data && <div className="notice mb-3 p-3 text-[13px]" role="status">{targetExists ? <>돌아온 공고가 현재 검색·필터에 보이지 않습니다. <button className="page-link" onClick={() => { setF(ALL); setQ('') }}>검색·필터 초기화</button></> : '돌아온 공고가 현재 후보 목록에 없습니다.'}</div>}
 
@@ -212,7 +209,9 @@ export default function CandidatesPage() {
       </div>}
 
       <div className="surface mb-3 divide-y divide-[var(--line)]">
-
+        {live.length > 0 && <div aria-hidden="true" className={`${ROW_GRID} hidden rounded-t-lg border-l-[3px] border-l-transparent bg-[var(--hov)] px-3 py-2 text-[11px] text-[var(--dim)] md:grid md:px-4`}>
+          <span /><span>회사 · 공고</span><span className="text-center">적합도</span><span className="text-center">마감</span><span className="text-center">평판</span><span />
+        </div>}
         {isPending ? (
           [0, 1, 2, 3].map((i) => (
             <div key={i} className="border-b border-[var(--line)] px-[14px] py-[11px] last:border-b-0">
@@ -224,7 +223,8 @@ export default function CandidatesPage() {
         ) : visibleCount === 0 ? (
           <div className="empty-state">조건에 맞는 공고가 없습니다.</div>
         ) : (
-          live.map((c) => <Row key={c.id} c={c} app={data?.apps[c.id]} busy={busy} picked={picked.includes(c.id)} onSelect={selectCandidate} />)
+          live.length > 0 ? live.map((c) => <Row key={c.id} c={c} app={data?.apps[c.id]} busy={busy} picked={picked.includes(c.id)} onSelect={selectCandidate} />)
+            : <div className="empty-state">현재 조건의 공고는 아래 경력 재검토·마감 목록에서 확인할 수 있습니다.</div>
         )}
       </div>
 
@@ -232,7 +232,7 @@ export default function CandidatesPage() {
         <details open={!!target && review.some((c) => c.id === target)} className="mt-3.5 border-t border-[var(--line)]">
           <summary className="cursor-pointer py-[11px] text-[12px] text-[var(--dim)]">경력 재검토·제외 공고 <b>{review.length}</b>건</summary>
           <p className="mb-2 text-[12px] text-[var(--dim)]">7년 이상 조건의 기존 공고는 다음 스캔에서 AI가 다시 판정합니다. 기존 지원서류는 그대로 열 수 있습니다.</p>
-          {review.map((c) => <Row key={c.id} c={c} app={data?.apps[c.id]} busy={busy} picked={picked.includes(c.id)} onSelect={selectCandidate} />)}
+          <div className="surface divide-y divide-[var(--line)]">{review.map((c) => <Row key={c.id} c={c} app={data?.apps[c.id]} busy={busy} picked={picked.includes(c.id)} onSelect={selectCandidate} />)}</div>
         </details>
       )}
 
@@ -250,6 +250,7 @@ export default function CandidatesPage() {
       )}
 
       {data?.updated && <p className="mt-4 text-[11px] text-[var(--faint)]">갱신 {data.updated}</p>}
+      <p className="mt-2 text-[12px] text-[var(--dim)]">점수는 검토를 돕는 참고값입니다. 지원 자격과 근무 조건은 공고 원문을 확인하세요.</p>
     </Page>
   )
 }
@@ -278,9 +279,6 @@ function Group({
 // 주소 원문은 "○○시 ○○구 ○○로 17, D1동 16층"처럼 길다 — 앞 두 토막(시·구)만 보인다
 const shortAddr = (a: string) => (a ? a.split(/[,(]/)[0].split(/\s+/).slice(0, 2).join(' ') : '')
 
-const ZONE_CLS = (z: number) =>
-  z <= 1 ? 'font-bold text-[var(--good)]' : z === 2 ? 'font-bold text-[var(--warn)]' : z <= 4 ? 'font-bold text-[var(--bad)]' : 'text-[var(--dim)]'
-
 const REP_CLS: Record<string, string> = {
   good: 'text-[var(--good)]',
   warn: 'text-[var(--warn)]',
@@ -296,38 +294,53 @@ function Row({ c, app, busy, picked, onSelect }: {
   onSelect: (id: string, checked: boolean) => void
 }) {
   const dead = isDead(c)
+  const [expanded, setExpanded] = useState(false)
+  const detailId = `candidate-info-${c.id}`
+  const detailHref = '/applications/job/' + encodeURIComponent(c.id)
+  const rememberScroll = () => {
+    try { sessionStorage.setItem(SCROLL_STORE, String(window.scrollY)) } catch { /* 저장소 없이 이동 */ }
+  }
   return (
-    <article id={'candidate-' + c.id} className={'rail ' + RAIL[c.rep_key] + ' min-w-0 bg-[var(--row)] px-4 py-4 hover:bg-[var(--hov)] ' + (dead ? 'opacity-70' : '')}>
-      <div className="flex min-w-0 items-start gap-3">
-        <Checkbox checked={picked} disabled={busy} aria-label={c.company + ' ' + c.title + ' 선택'} onCheckedChange={(checked) => onSelect(c.id, checked)} />
-        <div className="min-w-0 flex-1">
-          <a href={c.url} target="_blank" rel="noopener" className="block text-[14px] font-semibold leading-snug break-words text-[var(--link)] hover:underline">{c.company} · {c.title}</a>
-          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-[var(--dim)]">
-            <span>{c.career || '경력 조건 미확인'}</span>
-            <Due due={c.due} cls={c.due_cls} />
-            <span>근무지 <strong className={ZONE_CLS(c.zone)}>{c.zone_label}</strong>{c.addr && ' · ' + shortAddr(c.addr)}</span>
+    <article id={'candidate-' + c.id} className={`rail ${RAIL[c.rep_key]} min-w-0 px-3 py-3 md:px-4 ${picked ? 'bg-[var(--neubg)]' : 'bg-[var(--row)] hover:bg-[var(--hov)]'} ${dead ? 'opacity-70' : ''}`}>
+      <div className={ROW_GRID}>
+        <Checkbox className="self-start mt-3" checked={picked} disabled={busy} aria-label={c.company + ' ' + c.title + ' 선택'} onCheckedChange={(checked) => onSelect(c.id, checked)} />
+        <div className="min-w-0">
+          <Link href={detailHref} onClick={rememberScroll} className="group block min-h-11 text-[var(--fg)] no-underline" title={c.company + ' · ' + c.title}>
+            <span className="block truncate text-[12px] text-[var(--dim)]">{c.company}</span>
+            <span className="line-clamp-2 text-[14px] font-semibold leading-snug break-words group-hover:text-[var(--link)] group-hover:underline">{c.title}</span>
+          </Link>
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-[var(--dim)]">
+            <span>{c.career || '경력 미확인'}</span>
+            {(c.addr || c.zone_label) && <span>· {shortAddr(c.addr) || c.zone_label}</span>}
+            {app && <span>· 초안 {app.n}종</span>}
+            {(c.experience_excluded || c.experience_review_required) && <span className="text-[var(--warn)]">· {c.experience_excluded ? '경력 검토 제외' : '경력 재검토'}</span>}
+            {c.tags.includes('rejected') && <span className="text-[var(--bad)]">· 탈락 이력</span>}
           </div>
-          <p className="mt-2 mb-0 text-[13px] leading-relaxed break-words">
-            {c.experience_excluded ? '경력 검토 제외 · ' + (c.experience_reason || '사유 미기록') : c.experience_review_required ? '경력 조건 재검토 필요' : '필수 요건 원문 확인 필요'}
-          </p>
-          <p className="mt-1 mb-0 text-[13px] leading-relaxed break-words text-[var(--dim)]">등록 메모 · {c.rep_note || '기록 없음'}</p>
-          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-[var(--dim)]">
-            <span>추천도 <strong className="tabular text-[var(--fg)]">{c.experience_review_required || c.experience_excluded ? '—' : Math.round(c.rec)}</strong> · #{c.rank ?? '-'}</span>
-            <span>적합도 <strong className="tabular text-[var(--fg)]">{c.total}</strong></span>
-            <span>평판 <strong className={REP_CLS[c.rep_key]}>{c.rep_label || '정보 없음'}</strong>{c.rep && ' · ' + c.rep[1] + ' / ' + (c.rep[2] ?? '표본 미확인') + '건'}</span>
-            <span>초안 {app ? app.n + '종' : '없음'}</span>
-          </div>
-          {c.rep?.[4] && <p className="mt-1 mb-0 text-[12px] text-[var(--dim)]">평판 최근 흐름 · {c.rep[4]}</p>}
-          {c.tags.filter((t) => TAGS[t]).map((t) => <Badge key={t} variant="secondary" className={'mr-1 mt-2 rounded px-2 text-[11px] ' + TAGS[t][1]}>{TAGS[t][0]}</Badge>)}
-          <div className="mt-3 flex flex-wrap gap-3 text-[13px]">
-            <Link href={'/applications/job/' + encodeURIComponent(c.id)} onClick={() => { try { sessionStorage.setItem(SCROLL_STORE, String(window.scrollY)) } catch { /* 저장소 없이 이동 */ } }} className="page-link">공고 상세·지원서류 보기 →</Link>
-            <a href={jobplanetUrl(c.company)} target="_blank" rel="noopener" className="page-link">잡플래닛</a>
-          </div>
-          <details className="mt-3 border-t border-[var(--line)] pt-2 text-[12px] text-[var(--dim)]">
-            <summary className="cursor-pointer text-[var(--link)] underline underline-offset-2">점수·평판 상세</summary>
-            <div className="mt-3 flex flex-wrap gap-4">{c.scores.map((v, i) => <span key={i}>{AXES[i]} {v}</span>)}</div>
-            {c.rep ? <p className="mt-2">평판 {c.rep[1]} · 표본 {c.rep[2] ?? '미확인'}건 · 별점 {c.rep[3]} · {c.rep[4]}</p> : <p className="mt-2">평판 정보 없음</p>}
-          </details>
+        </div>
+        <div className="col-start-2 mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] md:contents">
+          <span className="tabular md:text-center"><span className="mr-1 text-[var(--dim)] md:sr-only">적합도</span><strong className="font-semibold">{c.total}</strong></span>
+          <span className="md:text-center">{c.closed ? <span className="text-[var(--bad)]">공고 마감</span> : <Due due={c.due} cls={c.due_cls} />}</span>
+          <span className={`md:text-center ${REP_CLS[c.rep_key]}`}><span className="sr-only">평판 </span>{c.rep_label || '정보 없음'}</span>
+        </div>
+        <Button variant="ghost" size="icon" className="col-start-3 row-start-1 self-start text-[var(--dim)] md:col-start-6 md:self-center" aria-expanded={expanded} aria-controls={detailId} aria-label={`${c.company} ${c.title} 검토 정보 ${expanded ? '접기' : '펼치기'}`} title={expanded ? '검토 정보 접기' : '검토 정보 펼치기'} onClick={() => setExpanded(!expanded)}>
+          <ChevronDown aria-hidden="true" className={expanded ? 'rotate-180' : ''} />
+        </Button>
+      </div>
+      <div id={detailId} hidden={!expanded} className="mt-3 border-t border-[var(--line)] pt-3 text-[13px] leading-relaxed text-[var(--dim)] md:ml-9">
+        <p className="break-words">등록 메모 · {c.rep_note || '기록 없음'}</p>
+        {c.experience_excluded && <p className="mt-2 break-words text-[var(--warn)]">경력 검토 제외 · {c.experience_reason || '사유 미기록'}</p>}
+        {c.experience_review_required && <p className="mt-2 text-[var(--warn)]">경력 조건 재검토 필요{c.experience_reason && ` · ${c.experience_reason}`}</p>}
+        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px]">
+          <span>추천도 <strong className="tabular text-[var(--fg)]">{c.experience_review_required || c.experience_excluded ? '—' : Math.round(c.rec)}</strong> · #{c.rank ?? '-'}</span>
+          {c.scores.map((v, i) => <span key={i}>{AXES[i]} {v}</span>)}
+        </div>
+        <p className="mt-2 break-words">근무지 · {c.addr || '미확인'}{c.zone_label && ` · ${c.zone_label}`}</p>
+        {c.rep ? <p className="mt-2 break-words">평판 {c.rep[1]} · 표본 {c.rep[2] === null ? '미확인' : `${c.rep[2]}건`} · 별점 {c.rep[3]}{c.rep[4] && ` · ${c.rep[4]}`}</p> : <p className="mt-2">평판 정보 없음</p>}
+        {c.tags.filter((t) => TAGS[t] && t !== 'rejected').map((t) => <Badge key={t} variant="secondary" className={'mr-1 mt-2 rounded px-2 text-[11px] ' + TAGS[t][1]}>{TAGS[t][0]}</Badge>)}
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Link href={detailHref} onClick={rememberScroll} className="page-link">공고 상세·지원서류 →</Link>
+          <a href={c.url} target="_blank" rel="noopener" className="page-link">공고 원문 <ExternalLink size={13} aria-hidden="true" /></a>
+          <a href={jobplanetUrl(c.company)} target="_blank" rel="noopener" className="page-link">잡플래닛 <ExternalLink size={13} aria-hidden="true" /></a>
         </div>
       </div>
     </article>

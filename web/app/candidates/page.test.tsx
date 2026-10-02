@@ -44,6 +44,22 @@ test('StrictMode에서도 상세 복귀 후 검색·정렬·필터를 유지하�
     expect(search.value).toBe('')
     expect(host.querySelector('#candidate-c1')).not.toBeNull()
     expect(host.textContent).toContain('등록 메모 · 업무 경험 적합')
+    const row = host.querySelector('#candidate-c1')!
+    const toggle = row.querySelector<HTMLButtonElement>('button[aria-controls="candidate-info-c1"]')!
+    const info = row.querySelector<HTMLElement>('#candidate-info-c1')!
+    expect(info.hidden).toBe(true)
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(row.querySelector('a')?.getAttribute('href')).toBe('/applications/job/c1')
+    expect(info.textContent).toContain('등록 메모 · 업무 경험 적합')
+    expect(info.querySelector('a[target="_blank"]')?.getAttribute('href')).toBe(candidate.url)
+    expect(host.textContent).not.toContain('필수 요건 원문 확인 필요')
+    await act(async () => toggle.click())
+    expect(info.hidden).toBe(false)
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(row.querySelector('[role="checkbox"]')?.getAttribute('aria-checked')).toBe('false')
+    expect(host.querySelector<HTMLElement>('#candidate-info-c2')?.hidden).toBe(true)
+    await act(async () => toggle.click())
+    expect(info.hidden).toBe(true)
     expect(scroll).toHaveBeenCalled()
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(search, '테스트회사')
@@ -80,6 +96,27 @@ test('StrictMode에서도 상세 복귀 후 검색·정렬·필터를 유지하�
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('일시적 오류')
     expect(host.textContent).toContain('2건 선택')
     expect(host.textContent).toContain('후보 목록 새로고침')
+    // 접힌 보관 목록에서도 상태 경고는 행 요약에, 긴 사유는 검토 정보에 남는다.
+    await act(async () => {
+      qc.setQueryData(['candidates'], {
+        ...candidates,
+        rows: [
+          { ...candidate, experience_excluded: true, experience_reason: '필수 경력 부족', rep_key: 'bad', rep_label: '회피' },
+          { ...candidate, id: 'c2', title: '데이터 엔지니어', closed: true },
+          { ...candidate, id: 'c3', experience_review_required: true },
+        ],
+      })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    const excluded = host.querySelector('#candidate-c1')!
+    const summary = excluded.firstElementChild!
+    expect(summary.textContent).toContain('경력 검토 제외')
+    expect(summary.textContent).toContain('회피')
+    expect(summary.textContent).not.toContain('필수 경력 부족')
+    expect(excluded.querySelector<HTMLElement>('#candidate-info-c1')?.hidden).toBe(true)
+    expect(excluded.textContent).toContain('필수 경력 부족')
+    expect(host.querySelector('#candidate-c2')?.firstElementChild?.textContent).toContain('공고 마감')
+    expect(host.querySelector('#candidate-c3')?.firstElementChild?.textContent).toContain('경력 재검토')
   } finally {
     await act(async () => root.unmount())
     host.remove()
