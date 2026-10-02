@@ -187,6 +187,9 @@ cd web && API_URL=http://localhost:8091 npm run dev    # 터미널 4 — 화면 
 uv run python -m scripts.sync_wanted_offers --jobfeed /path/to/resume-private/jobfeed
 ```
 
+화면의 주기적 갱신은 저장된 파일만 다시 읽는다. 원티드에서 수락·거절한 뒤에는
+이 명령을 다시 실행해야 변경된 응답 상태가 반영된다.
+
 `jobfeed/wanted_offers.json`에 최초 OFFER 이벤트 ID로 병합한다. 목록의 position ID와
 상세의 공고 ID가 다를 수 있어 연결에는 상세 `proposal.job_id`를 사용한다.
 수락·거절 뒤에도 최초 ID와 수신일을 유지하고, 목록에서 사라진 과거 제안도 보존한다.
