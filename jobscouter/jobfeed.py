@@ -11,9 +11,9 @@ from datetime import date
 
 from temporalio import activity
 
-from jobscouter import company_jobs
+from jobscouter import company_jobs, linkedin
 from jobscouter.config import JOBFEED, _norm, job_cid, job_reference, settings
-from jobscouter.io_acts import _HDR, _SSL, _expired  # io_acts는 jobfeed를 import하지 않는다
+from jobscouter.io_acts import _HDR, _SSL, _expired, _JOBFEED_LOCK  # io_acts는 jobfeed를 import하지 않는다
 from jobscouter.eligibility import career_label
 
 _WANTED_SEARCH = "https://www.wanted.co.kr/api/chaos/search/v1/results?"
@@ -100,18 +100,32 @@ def fetch_jobs() -> str:
     seen = set(existing)
     new: dict[str, dict] = {}
     options = settings()
+    summaries = []
+    platforms = [_wanted, _jumpit]
+    if "linkedin" in options["companies"]:
+        platforms.append(linkedin.search)
     for kw in options["keywords"]:
-        for source in (_wanted, _jumpit):
+        for source in platforms:
+            name = "linkedin" if source is linkedin.search else source.__name__
+            count = 0
             try:
                 for job in source(kw):
+                    count += 1
                     key = f"{job['src']}:{job['id']}"
                     if key not in seen and key not in new:
                         new[key] = job
+                if source is linkedin.search:
+                    summaries.append(f"linkedin/{kw} {count}건 확인")
+            except linkedin.SearchLimitReached as e:
+                summaries.append(f"linkedin/{kw} {count}건 확인 · {e}")
             except Exception as e:  # 한 소스가 죽어도 나머지는 수집
-                print(f"! {source.__name__}/{kw}: {e}", file=sys.stderr)
+                summaries.append(f"{name}/{kw} 조회 실패: {e}")
+                print(f"! {summaries[-1]}", file=sys.stderr)
+                if source is linkedin.search:
+                    platforms = [_wanted, _jumpit]
+                    summaries.append("linkedin 후속 키워드 조회 중단 — 기존 기록 보존")
 
-    summaries = []
-    sources = options["companies"] if options["keywords"] else []
+    sources = [s for s in options["companies"] if s != "linkedin"] if options["keywords"] else []
     # 소스 간에만 병렬 조회 — 같은 회사에는 순서대로 요청한다.
     with ThreadPoolExecutor(max_workers=4) as pool:
         pending = {source: pool.submit(company_jobs.load, source) for source in sources}
@@ -155,9 +169,14 @@ def fetch_jobs() -> str:
             summaries.append(f"{source} {len(jobs)}건 확인·키워드 일치 {matched}건")
 
     records.extend({**job, "found": date.today().isoformat()} for job in new.values())
-    temp = store.with_suffix(".jsonl.tmp")
-    temp.write_text("".join(json.dumps(j, ensure_ascii=False) + "\n" for j in records))
-    temp.replace(store)
+    with _JOBFEED_LOCK:
+        # 검색 중 다른 activity가 읽은 LinkedIn 상세·마감 기록을 덮어쓰지 않는다.
+        latest = {job_cid(j): j for line in (store.read_text().splitlines() if store.exists() else [])
+                  if line.strip() and (j := json.loads(line))["src"] == "linkedin"}
+        records = [latest.get(job_cid(j), j) if j["src"] == "linkedin" else j for j in records]
+        temp = store.with_suffix(".jsonl.tmp")
+        temp.write_text("".join(json.dumps(j, ensure_ascii=False) + "\n" for j in records))
+        temp.replace(store)
     summary = (" · " + "; ".join(summaries)) if summaries else ""
 
     if not new:  # 재실행해도 직전 다이제스트를 날리지 않음

@@ -71,6 +71,78 @@ def test_fetch_jobs_survives_one_dead_source(repo, monkeypatch):
     assert len((repo / "jobs.jsonl").read_text().splitlines()) == 3
 
 
+def test_linkedin_search_is_opt_in_deduplicated_and_does_not_close_missing(repo, monkeypatch):
+    monkeypatch.setattr(jobfeed, "_wanted", lambda kw: iter(()))
+    monkeypatch.setattr(jobfeed, "_jumpit", lambda kw: iter(()))
+    calls = []
+    job = {"src": "linkedin", "id": "12", "title": "LLM Engineer", "company": "테스트",
+           "loc": "서울", "career": "미확인", "stacks": [], "due": "상시",
+           "url": "https://www.linkedin.com/jobs/view/12/", "kw": "LLM"}
+    def search(kw):
+        calls.append(kw)
+        return iter([job.copy()])
+    monkeypatch.setattr(jobfeed.linkedin, "search", search)
+    jobfeed.fetch_jobs()
+    assert calls == []
+    (repo.parent / "settings.json").write_text(json.dumps({
+        "keywords": ["LLM", "Python"], "companies": ["linkedin"]}))
+    previous = {**job, "id": "99", "found": "2026-09-01"}
+    (repo / "jobs.jsonl").write_text(json.dumps(previous) + "\n")
+    assert "linkedin/LLM 1건 확인" in jobfeed.fetch_jobs()
+    assert calls == ["LLM", "Python"]
+    records = [json.loads(s) for s in (repo / "jobs.jsonl").read_text().splitlines()]
+    assert len(records) == 2 and records[0] == previous
+    assert records[1]["id"] == "12"
+    assert "새 공고 없음" in jobfeed.fetch_jobs()
+    assert "https://www.linkedin.com/jobs/view/12/" in (repo / "new.md").read_text()
+    before = (repo / "jobs.jsonl").read_text()
+    calls.clear()
+    def blocked(kw):
+        calls.append(kw)
+        raise urllib.error.HTTPError("https://www.linkedin.com/jobs/", 429, "rate limited", {}, None)
+    monkeypatch.setattr(jobfeed.linkedin, "search", blocked)
+    result = jobfeed.fetch_jobs()
+    assert "linkedin/LLM 조회 실패" in result and "후속 키워드 조회 중단" in result
+    assert calls == ["LLM"] and (repo / "jobs.jsonl").read_text() == before
+
+
+def test_linkedin_result_limit_keeps_rows_and_continues_next_keyword(repo, monkeypatch):
+    monkeypatch.setattr(jobfeed, "_wanted", lambda kw: iter(()))
+    monkeypatch.setattr(jobfeed, "_jumpit", lambda kw: iter(()))
+    (repo.parent / "settings.json").write_text(json.dumps({
+        "keywords": ["LLM", "Python"], "companies": ["linkedin"]}))
+    calls = []
+    def search(kw):
+        calls.append(kw)
+        yield {"src": "linkedin", "id": str(len(calls)), "title": kw, "company": "회사",
+               "loc": "서울", "career": "미확인", "stacks": [], "due": "상시",
+               "url": f"https://www.linkedin.com/jobs/view/{len(calls)}/", "kw": kw}
+        if kw == "LLM":
+            raise jobfeed.linkedin.SearchLimitReached(1)
+    monkeypatch.setattr(jobfeed.linkedin, "search", search)
+    result = jobfeed.fetch_jobs()
+    assert calls == ["LLM", "Python"]
+    assert "한도 1000개" in result and "linkedin/Python 1건 확인" in result
+    assert "조회 실패" not in result
+    assert len((repo / "jobs.jsonl").read_text().splitlines()) == 2
+
+
+def test_linkedin_search_preserves_detail_saved_during_collection(repo, monkeypatch):
+    monkeypatch.setattr(jobfeed, "_wanted", lambda kw: iter(()))
+    monkeypatch.setattr(jobfeed, "_jumpit", lambda kw: iter(()))
+    (repo.parent / "settings.json").write_text(json.dumps({
+        "keywords": ["LLM"], "companies": ["linkedin"]}))
+    path = repo / "jobs.jsonl"
+    row = {"src": "linkedin", "id": "12", "due": "상시"}
+    path.write_text(json.dumps(row) + "\n")
+    def search(kw):
+        path.write_text(json.dumps({**row, "due": "closed", "description": "확인한 본문"}) + "\n")
+        return iter(())
+    monkeypatch.setattr(jobfeed.linkedin, "search", search)
+    jobfeed.fetch_jobs()
+    assert json.loads(path.read_text()) == {**row, "due": "closed", "description": "확인한 본문"}
+
+
 def test_refresh_due_updates_due_addr_and_closed(repo, monkeypatch):
     def get(url):
         if "/api/v4/jobs/222" in url:

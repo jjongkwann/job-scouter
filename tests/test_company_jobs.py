@@ -17,6 +17,7 @@ from jobscouter.config import job_cid, job_reference
     ("hyundai", "2026_N2_12", "hyundai_2026_N2_12", "recuType=N2&recuCls=12"),
     ("autoever", 12, "autoever_12", "/ko/o/12"), ("mobis", 12, "mobis_12", "seq=12"),
     ("remember", 12, "remember_12", "/job/posting/12"),
+    ("linkedin", 12, "linkedin_12", "/jobs/view/12/"),
 ])
 def test_source_ids_keep_existing_data_and_do_not_collide(src, pid, cid, fragment):
     assert job_cid({"src": src, "id": pid}) == cid
@@ -28,7 +29,7 @@ def test_dates_and_invalid_external_ids():
     assert C._date("2026년 09월 12일(토)") == "2026-09-12"
     assert C._date("202609121800") == "2026-09-12"
     assert C._date("2026-09-12T16:00:00Z") == "2026-09-13"
-    for cid in ("daangn_../../etc", "unknown_1", "hyundai_1", "samsung_1&no=2", "lg_12", "lg_12_1&x=2", "remember_../1"):
+    for cid in ("daangn_../../etc", "unknown_1", "hyundai_1", "samsung_1&no=2", "lg_12", "lg_12_1&x=2", "remember_../1", "linkedin_../1"):
         with pytest.raises(ValueError):
             job_reference(cid)
 

@@ -366,5 +366,8 @@ def detail(source: str, pid: str) -> dict:
     if source == "remember":
         from jobscouter import remember
         return remember.detail(pid)
+    if source == "linkedin":
+        from jobscouter import linkedin
+        return linkedin.detail(pid)
     return {"daangn": _daangn, "toss": _toss, "samsung": _samsung, "sk": _sk,
             "hyundai": _hyundai, "autoever": _autoever, "mobis": _mobis, "lg": _lg}[source](pid)

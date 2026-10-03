@@ -4,10 +4,13 @@ import json
 import re
 import ssl
 import subprocess
+import urllib.error
 import urllib.request
 from datetime import date, datetime
+from threading import Lock
 
 from temporalio import activity
+from temporalio.exceptions import ApplicationError
 
 from jobscouter import company_jobs
 from jobscouter.candidates import KST, days_left, dues
@@ -47,6 +50,7 @@ except ImportError:
 _HDR = {"User-Agent": "Mozilla/5.0", "wanted-os": "web"}
 REQ_CAP = 2000  # judge 입력 캡 — 루브릭+사실베이스 ~25k 토큰이라 원문 2000자는 비용에 안 잡힌다. 300자일 때 65건 중 22건이 스택 요건 앞에서 잘렸다
 POSTING_CAP = 6000  # 지원서류 초안용 공고 전문 캡
+_JOBFEED_LOCK = Lock()  # 한 IO 프로세스의 병렬 상세 조회·수집 저장을 직렬화한다.
 
 
 def _get(url: str) -> dict:
@@ -140,8 +144,38 @@ def load_targets() -> list[Target]:
     return out
 
 
+def _save_linkedin_detail(cid: str, detail: dict) -> None:
+    """평가 중 읽은 본문·명시적 마감을 원본 행에 보존한다. 발견일·검색어는 유지한다."""
+    path = JOBFEED / "jobs.jsonl"
+    with _JOBFEED_LOCK:
+        records = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+        for job in records:
+            if job_cid(job) == cid:
+                job.update({k: v for k, v in detail.items() if k not in ("kw", "found")})
+                break
+        else:
+            raise ValueError(f"{cid}: 저장된 공고 없음")
+        temp = path.with_suffix(".jsonl.tmp")
+        temp.write_text("".join(json.dumps(j, ensure_ascii=False) + "\n" for j in records))
+        temp.replace(path)
+
+
 def _company_posting(t: Target) -> str:
-    """스캔에서 저장한 공식 공고 본문 — 채점과 초안이 같은 원문을 사용한다."""
+    """공식 공고 저장 본문. 목록만 수집한 LinkedIn은 평가·초안 시 상세를 읽는다."""
+    if t.src == "linkedin":
+        try:
+            job = company_jobs.detail(t.src, t.id.partition("_")[2])
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429:
+                raise ApplicationError(f"{t.id}: LinkedIn 조회 제한 — 대기 후 다음 조사에서 재확인",
+                                       non_retryable=True) from exc
+            if exc.code not in (404, 410):
+                raise
+            job = {"due": "closed"}
+        _save_linkedin_detail(t.id, job)
+        if job["due"] == "closed":
+            raise ApplicationError(f"{t.id}: 마감된 공고", non_retryable=True)
+        return f"[경력 조건] {job['career']}\n{job['description']}"
     for line in (JOBFEED / "jobs.jsonl").read_text().splitlines():
         job = json.loads(line)
         if job_cid(job) == t.id:

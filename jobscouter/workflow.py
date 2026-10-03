@@ -121,7 +121,8 @@ class DailyScan:
         await workflow.execute_activity("sync_repo", **_IO_OPTS)
 
         self._stage = "fetch"
-        await workflow.execute_activity("fetch_jobs", **_IO_OPTS)
+        await workflow.execute_activity("fetch_jobs", **{
+            **_IO_OPTS, "start_to_close_timeout": timedelta(minutes=60)})
 
         self._stage = "대상 선정"
         targets = await workflow.execute_activity("load_targets", **_IO_OPTS)

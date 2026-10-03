@@ -21,7 +21,7 @@ const RAIL: Record<string, string> = { good: 'rail-good', warn: 'rail-warn', bad
 
 // 거부 사유 프리셋 — X를 고르면 첫 항목으로 미리 채워지고, datalist로도 제안된다
 const X_REASONS = ['적합도 낮음', '스택 불일치', '도메인 불일치', '레벨 불일치', '역할 불일치', '마감·내려감', '평판', '조건(연봉·근무지)']
-const SOURCES: Record<string, string> = { wanted: '원티드', jumpit: '점핏', remember: '리멤버' }
+const SOURCES: Record<string, string> = { wanted: '원티드', jumpit: '점핏', remember: '리멤버', linkedin: '링크드인' }
 
 type Decision = { d: 'o' } | { d: 'x'; why: string }
 

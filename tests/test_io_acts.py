@@ -1,10 +1,12 @@
 import hashlib
 import json
 import subprocess
+import urllib.error
 from datetime import date
 from pathlib import Path
 
 import pytest
+from temporalio.exceptions import ApplicationError
 
 import jobscouter.candidates as cands
 import jobscouter.io_acts as io_acts
@@ -48,6 +50,52 @@ def test_load_targets(tmp_path, monkeypatch):
     # 111 등재됨·222 등재됨·333 스킵·444 🚫회사 정규화 매칭·666 현 루브릭 판정·888 마감 지남·
     # 999 옛 루브릭 exclude(버전 무관 유지) → 남는 건 j555와 옛 루브릭 pending 777(재판정 대상)
     assert ids == ["j555", "777"]
+
+
+def test_linkedin_requirements_and_draft_read_full_detail_and_reject_closed(tmp_path, monkeypatch):
+    _touch_jobfeed(tmp_path, monkeypatch)
+    target = Target("linkedin_12", "회사", "AI Engineer", "linkedin",
+                    "https://www.linkedin.com/jobs/view/12/")
+    job = {"description": "회사 소개 " + "가" * 3000 + "\n필수: Python, 3+ years, English",
+           "career": "Mid-Senior level", "due": "상시"}
+    record = {"src": "linkedin", "id": "12", "company": "회사", "title": "AI Engineer",
+              "url": target.url, "found": "2026-10-01", "kw": "AI Agent", "due": "상시"}
+    path = tmp_path / "jobs.jsonl"
+    path.write_text(path.read_text() + "\n" + json.dumps(record) + "\n")
+    def detail(src, pid):
+        assert (src, pid) == ("linkedin", "12")
+        return job
+    monkeypatch.setattr(io_acts.company_jobs, "detail", detail)
+    text = io_acts.fetch_requirements(target)
+    assert text == io_acts.fetch_posting_full(target)
+    assert text.startswith("[경력 조건] Mid-Senior level\n")
+    assert text.endswith("필수: Python, 3+ years, English")
+    assert "linkedin_12" in {t.id for t in io_acts.load_targets()}
+    job["due"] = "closed"
+    with pytest.raises(ApplicationError, match="마감된 공고") as exc:
+        io_acts.fetch_requirements(target)
+    assert exc.value.non_retryable
+    assert "linkedin_12" not in {t.id for t in io_acts.load_targets()}
+    saved = json.loads(path.read_text().splitlines()[-1])
+    assert saved["due"] == "closed" and saved["description"] == job["description"]
+    assert saved["found"] == record["found"] and saved["kw"] == record["kw"]
+
+
+@pytest.mark.parametrize("code", [404, 410, 429])
+def test_linkedin_http_status_preserves_or_closes_without_retries(tmp_path, monkeypatch, code):
+    monkeypatch.setattr(io_acts, "JOBFEED", tmp_path)
+    row = {"src": "linkedin", "id": "12", "due": "상시", "description": "보존할 본문"}
+    path = tmp_path / "jobs.jsonl"
+    path.write_text(json.dumps(row) + "\n")
+    target = Target("linkedin_12", "회사", "AI Engineer", "linkedin", "u")
+    def detail(src, pid):
+        raise urllib.error.HTTPError("u", code, "unavailable", {}, None)
+    monkeypatch.setattr(io_acts.company_jobs, "detail", detail)
+    with pytest.raises(ApplicationError) as exc:
+        io_acts.fetch_requirements(target)
+    assert exc.value.non_retryable
+    expected = row if code == 429 else {**row, "due": "closed"}
+    assert json.loads(path.read_text()) == expected
 
 
 def test_fetch_requirements_jumpit_plural_and_cap(monkeypatch):

@@ -6,10 +6,11 @@ import { expect, test, vi } from 'vitest'
 import * as api from '@/lib/api'
 import Home from './page'
 
-test('grouped postings retain source links and independent publish decisions', async () => {
+test.each(['jumpit', 'linkedin'])('grouped postings retain %s links and independent publish decisions', async (secondSource) => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
-  const postings = ['wanted', 'jumpit'].map((src, i): api.Proposal => ({
-    id: i ? 'j2' : '1', company: '테스트회사', title: 'AI 개발자', src,
+  const secondId = secondSource === 'jumpit' ? 'j2' : 'linkedin_2'
+  const postings = ['wanted', secondSource].map((src, i): api.Proposal => ({
+    id: i ? secondId : '1', company: '테스트회사', title: 'AI 개발자', src,
     url: `https://example.com/${src}`, scores: [30, 20, 20, 15, 0], total: 85,
     reason: `${src} 판정`, quotes: [], confidence: 0.9, rubric_version: 'v2', judged_at: '',
     cells: [[30, 'hi'], [20, ''], [20, 'hi'], [15, ''], ['·', '']], tier: 't1', rail: 'none',
@@ -33,9 +34,10 @@ test('grouped postings retain source links and independent publish decisions', a
     expect(host.querySelectorAll('section')).toHaveLength(1)
     expect(host.textContent).toContain('같은 공고 2개 사이트')
     expect(host.querySelector('a[href="https://example.com/wanted"]')).not.toBeNull()
-    expect(host.querySelector('a[href="https://example.com/jumpit"]')).not.toBeNull()
+    expect(host.querySelector(`a[href="https://example.com/${secondSource}"]`)).not.toBeNull()
     expect(host.textContent).toContain('wanted 판정')
-    expect(host.textContent).toContain('jumpit 판정')
+    expect(host.textContent).toContain(`${secondSource} 판정`)
+    expect(host.textContent).toContain(secondSource === 'linkedin' ? '링크드인' : '점핏')
     const approve = host.querySelectorAll<HTMLButtonElement>('button[aria-label$=" 후보 등록"]')
     const reject = host.querySelectorAll<HTMLButtonElement>('button[aria-label$=" 후보에서 제외"]')
     await act(async () => approve[1].click())
@@ -44,7 +46,7 @@ test('grouped postings retain source links and independent publish decisions', a
     await act(async () => reject[0].click())
     const submit = [...host.querySelectorAll('button')].find((b) => b.textContent === '2건 선택 처리')!
     await act(async () => { submit.click(); await new Promise((resolve) => setTimeout(resolve, 0)) })
-    expect(publish).toHaveBeenCalledWith('/publish', { ids: ['j2'], rejects: [{ id: '1', why: '적합도 낮음' }] })
+    expect(publish).toHaveBeenCalledWith('/publish', { ids: [secondId], rejects: [{ id: '1', why: '적합도 낮음' }] })
     expect(publish).toHaveBeenCalledTimes(1)
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('접수 응답 실패')
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('요청 접수 여부가 불분명')
@@ -52,7 +54,7 @@ test('grouped postings retain source links and independent publish decisions', a
     expect(reject[0].getAttribute('aria-pressed')).toBe('true')
     await act(async () => {
       qc.setQueryData(['dashboard'], { ...dashboard, publish: {
-        id: 'publish-1', status: 'FAILED', start: '2026-09-29 12:00', ids: ['j2'], reject_ids: ['1'], error: '초안 생성 실패',
+        id: 'publish-1', status: 'FAILED', start: '2026-09-29 12:00', ids: [secondId], reject_ids: ['1'], error: '초안 생성 실패',
       } })
       await new Promise((resolve) => setTimeout(resolve, 0))
     })

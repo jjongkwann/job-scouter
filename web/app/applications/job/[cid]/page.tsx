@@ -82,7 +82,7 @@ export default function JobApplicationPage({ params, searchParams }: { params: P
 
   const { candidate: c, folder, folders, others, docs, drafting } = data
   const experienceBlocked = c.experience_review_required || c.experience_excluded
-  const src = c.src === 'wanted' ? '원티드' : c.src === 'jumpit' ? '점핏' : c.src === 'remember' ? '리멤버' : '공식 채용'
+  const src = c.src === 'wanted' ? '원티드' : c.src === 'jumpit' ? '점핏' : c.src === 'remember' ? '리멤버' : c.src === 'linkedin' ? '링크드인' : '공식 채용'
   const status = isPlaceholderData ? '폴더 확인 중' : drafting ? '초안 생성 중' : folder?.docs.length ? `초안 ${folder.docs.length}/5종 생성` : '초안 없음'
   const extra = folder && !isPlaceholderData ? folder.files.filter((f) => !APP_FILES.includes(f)) : []
 
